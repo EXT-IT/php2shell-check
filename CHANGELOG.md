@@ -8,6 +8,27 @@ Changes to the vulnerability data (fixed versions, distribution packages) are
 listed separately from code changes, because they change verdicts without
 changing behaviour.
 
+## [1.4.0] - 2026-10-21
+
+Found by building a test environment with three containers: a vulnerable
+`php:8.3.35-apache`, a patched Debian 13 with php8.4 and an Ubuntu 24.04 with
+php8.3-fpm, whose `php -v` prints 8.3.6 before and after the fix.
+
+### Fixed
+
+- A Debian or Ubuntu based container was judged by `PHP_VERSION` alone, so a
+  container carrying the backported fix (`8.3.6-0ubuntu0.24.04.13`) was
+  reported as vulnerable. Containers are now judged by the package database
+  inside them, the same way the host is.
+- The Debian version comparison no longer depends on `dpkg` being installed.
+  Without it every comparison failed and reported a patched package as
+  vulnerable, which happens on any non-Debian host running Debian containers.
+  The fallback walks the version in digit and non-digit segments with `~`
+  sorting first, and is cross-checked against `dpkg` wherever dpkg exists.
+- Inside a container only the CLI `php.ini` was read. The SAPI that serves
+  requests has its own, and that is the one that decides whether the advisory
+  mitigations are in place.
+
 ## [1.3.0] - 2026-10-21
 
 The theme of this release is not claiming more than the script can know.
@@ -118,6 +139,7 @@ not dead sites.
   Ubuntu 26.04 `8.5.4-0ubuntu1.5`, Debian 13 `8.4.27-1~deb13u1` (DSA-6574-1).
 - Debian 12 (php8.2): marked vulnerable, no fix published yet.
 
+[1.4.0]: https://github.com/EXT-IT/php2shell-check/releases/tag/v1.4.0
 [1.3.0]: https://github.com/EXT-IT/php2shell-check/releases/tag/v1.3.0
 [1.2.1]: https://github.com/EXT-IT/php2shell-check/releases/tag/v1.2.1
 [1.2.0]: https://github.com/EXT-IT/php2shell-check/releases/tag/v1.2.0

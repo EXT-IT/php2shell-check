@@ -16,7 +16,7 @@
 set -u
 export LC_ALL=C
 
-P2S_SCRIPT_VERSION='1.3.0'
+P2S_SCRIPT_VERSION='1.4.0'
 P2S_DATA_DATE='2026-10-21'
 P2S_ADVISORY='GHSA-w8hw-w9fx-j79w'
 P2S_ADVISORY_URL='https://github.com/php/php-src/security/advisories/GHSA-w8hw-w9fx-j79w'
@@ -203,6 +203,59 @@ _p2s_vercmp() {
 }
 _p2s_ver_ge() { [ "$(_p2s_vercmp "$1" "$2")" != "-1" ]; }
 
+# Compare two Debian package versions. dpkg is the authority where it exists;
+# without it (a container judged from a non-Debian host, macOS) the fallback
+# walks the version in digit and non-digit segments the way dpkg does, with
+# "~" sorting before everything. Without this fallback a missing dpkg made
+# every comparison fail, which reported a patched package as vulnerable.
+_p2s_deb_ge() {
+    if command -v dpkg >/dev/null 2>&1; then
+        dpkg --compare-versions "$1" ge "$2"
+        return
+    fi
+    [ "$(_p2s_deb_cmp "$1" "$2")" != "-1" ]
+}
+
+_p2s_deb_cmp() {
+    awk -v a="$1" -v b="$2" '
+    function strip(s) { sub(/^[0-9]+:/, "", s); gsub(/~/, "\001", s); return s }
+    function tok(s, arr,   n, i, j, L, c) {
+        n = 0; i = 1; L = length(s)
+        while (i <= L) {
+            c = substr(s, i, 1)
+            if (c >= "0" && c <= "9") {
+                j = i
+                while (j <= L && substr(s, j, 1) >= "0" && substr(s, j, 1) <= "9") j++
+                n++; arr[n] = "N"; arr[n "v"] = substr(s, i, j - i) + 0
+            } else {
+                j = i
+                while (j <= L && !(substr(s, j, 1) >= "0" && substr(s, j, 1) <= "9")) j++
+                n++; arr[n] = "S"; arr[n "v"] = substr(s, i, j - i)
+            }
+            i = j
+        }
+        return n
+    }
+    BEGIN {
+        na = tok(strip(a), ta); nb = tok(strip(b), tb)
+        m = (na > nb) ? na : nb
+        for (k = 1; k <= m; k++) {
+            # A version that continues with "~" is older than one that ends
+            # here: 8.4.27-1~deb13u1 comes before 8.4.27-1.
+            if (k > na) { print (substr(tb[k "v"], 1, 1) == "\001") ? 1 : -1; exit }
+            if (k > nb) { print (substr(ta[k "v"], 1, 1) == "\001") ? -1 : 1; exit }
+            if (ta[k] == "N" && tb[k] == "N") {
+                if (ta[k "v"] + 0 < tb[k "v"] + 0) { print -1; exit }
+                if (ta[k "v"] + 0 > tb[k "v"] + 0) { print 1; exit }
+            } else {
+                if (ta[k "v"] "" < tb[k "v"] "") { print -1; exit }
+                if (ta[k "v"] "" > tb[k "v"] "") { print 1; exit }
+            }
+        }
+        print 0
+    }'
+}
+
 _p2s_is_version() { [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; }
 
 # Size strings from php.ini ("64M", "1G", "-1") to bytes.
@@ -298,12 +351,11 @@ _p2s_judge_upstream() {
     esac
 }
 
-# Verdict for a Debian/Ubuntu package. Prints "status|detail|hint".
-_p2s_judge_deb() {
-    local _pkg=$1 _v=$2 _pv _src _up _fixed _dfixed _cn
-    _pv=$(dpkg-query -W -f='${Version}' "$_pkg" 2>/dev/null | _p2s_clean 60)
-    _src=$(dpkg-query -W -f='${source:Package}' "$_pkg" 2>/dev/null | _p2s_clean 40)
-    _cn=$(_p2s_os_field VERSION_CODENAME)
+# Verdict for a Debian/Ubuntu package from data that may come from the host
+# or from inside a container: codename, source package, package version, the
+# PHP version and a label for the report. Prints "status|detail|hint".
+_p2s_judge_deb_data() {
+    local _cn=$1 _src=$2 _pv=$3 _v=$4 _pkg=$5 _up _fixed _dfixed
     _up=${_pv#*:}; _up=${_up%%[-+~]*}
     _fixed=$(_p2s_upstream_fixed "${_v%.*}")
     _dfixed=$(_p2s_distro_fixed "$_cn:$_src")
@@ -312,7 +364,7 @@ _p2s_judge_deb() {
     elif [ "$_dfixed" = unfixed ]; then
         echo "vuln|package $_pkg $_pv, the distribution has not published a fix yet|Apply the temporary mitigations below and watch the distribution's security tracker"
     elif [ "$_dfixed" != none ]; then
-        if dpkg --compare-versions "$_pv" ge "$_dfixed"; then
+        if _p2s_deb_ge "$_pv" "$_dfixed"; then
             echo "ok|package $_pkg $_pv (distribution fix from $_dfixed)|"
         else
             echo "vuln|package $_pkg $_pv, fixed in $_dfixed|apt-get update && apt-get install --only-upgrade $_pkg, then restart PHP-FPM / the web server"
@@ -320,6 +372,15 @@ _p2s_judge_deb() {
     else
         echo "unknown|package $_pkg $_pv, no fix data for ${_cn:-this release}|Install security updates and compare with the distribution's advisory for CVE-2026-109618"
     fi
+}
+
+# The same verdict for a package on this host.
+_p2s_judge_deb() {
+    local _pkg=$1 _v=$2 _pv _src _cn
+    _pv=$(dpkg-query -W -f='${Version}' "$_pkg" 2>/dev/null | _p2s_clean 60)
+    _src=$(dpkg-query -W -f='${source:Package}' "$_pkg" 2>/dev/null | _p2s_clean 40)
+    _cn=$(_p2s_os_field VERSION_CODENAME)
+    _p2s_judge_deb_data "$_cn" "$_src" "$_pv" "$_v" "$_pkg"
 }
 
 # Verdict for an RPM package. Prints "status|detail|hint".
@@ -498,7 +559,7 @@ _p2s_check_fpm_pools() {
 }
 
 _p2s_check_containers() {
-    local _rt _names _c _v _img _verdict _fpm
+    local _rt _names _c _v _img _verdict _fpm _cdeb _ccn _cini _csapi _cpkg _csrc _crest _cver
     for _rt in docker podman; do
         command -v "$_rt" >/dev/null 2>&1 || continue
         if ! _names=$(_p2s_timeout 10 "$_rt" ps --format '{{.Names}}' 2>/dev/null); then
@@ -516,9 +577,41 @@ _p2s_check_containers() {
             _p2s_is_version "$_v" || continue
             _found_ct=1
             _img=$("$_rt" inspect -f '{{.Config.Image}}' "$_c" 2>/dev/null | _p2s_clean 120)
-            _verdict=$(_p2s_judge_upstream "$_v")
+            # A Debian or Ubuntu based image carries backported fixes under an
+            # unchanged upstream number, exactly like the host does. Judging
+            # such a container by PHP_VERSION alone reports a patched
+            # container as vulnerable.
+            # Pick the installed php<branch>-common for the PHP version that
+            # was just measured. dpkg-query also lists uninstalled
+            # placeholders with an empty version, and the php-common meta
+            # package belongs to the source php-defaults, which carries no
+            # PHP version at all.
+            # shellcheck disable=SC2016  # dpkg format string, expanded by dpkg
+            _cdeb=$(_p2s_timeout 8 "$_rt" exec "$_c" dpkg-query -W -f='${db:Status-Abbrev} ${Package} ${source:Package} ${Version}\n' 'php*-common' 2>/dev/null \
+                    | awk -v want="php${_v%.*}-common" '$1 ~ /^ii/ && $4 != "" && $2 ~ /^php[0-9]/ {
+                           if ($2 == want) { print $2, $3, $4; exit }
+                           if (!first) first = $2 " " $3 " " $4
+                       } END { if (first) print first }' | head -n1 | _p2s_clean 160)
+            if [ -n "$_cdeb" ]; then
+                _ccn=$(_p2s_timeout 8 "$_rt" exec "$_c" cat /etc/os-release 2>/dev/null \
+                       | awk -F= '$1=="VERSION_CODENAME"{gsub(/"/,"",$2);print $2;exit}' | _p2s_clean 40)
+                _cpkg=${_cdeb%% *}
+                _crest=${_cdeb#* }
+                _csrc=${_crest%% *}
+                _cver=${_crest#* }
+                _verdict=$(_p2s_judge_deb_data "$_ccn" "$_csrc" "$_cver" "$_v" "$_cpkg")
+            else
+                _verdict=$(_p2s_judge_upstream "$_v")
+            fi
             _p2s_add_verdict container "$_c ($_img)" "$_verdict"
-            _p2s_check_ini "$_c" "$_rt" exec "$_c" php
+            _p2s_check_ini "$_c (CLI)" "$_rt" exec "$_c" php
+            # Debian layout inside the container: the SAPI that serves
+            # requests has its own php.ini, and that is the one that counts.
+            for _cini in $(_p2s_timeout 8 "$_rt" exec "$_c" sh -c 'ls /etc/php/*/fpm/php.ini /etc/php/*/apache2/php.ini 2>/dev/null' 2>/dev/null | _p2s_clean_lines); do
+                case "$_cini" in /etc/php/*/php.ini) ;; *) continue ;; esac
+                _csapi=${_cini%/php.ini}; _csapi=${_csapi##*/}
+                _p2s_check_ini "$_c ($_csapi)" "$_rt" exec -e "PHP_INI_SCAN_DIR=${_cini%/php.ini}/conf.d" "$_c" php -c "$_cini"
+            done
             _fpm=$(_p2s_timeout 5 "$_rt" exec "$_c" sh -c 'command -v php-fpm >/dev/null 2>&1 && grep -hE "^[[:space:]]*pm\.max_requests" /usr/local/etc/php-fpm.d/*.conf 2>/dev/null | tail -n1 | cut -d= -f2' 2>/dev/null | tr -dc '0-9')
             if _p2s_timeout 5 "$_rt" exec "$_c" sh -c 'command -v php-fpm' >/dev/null 2>&1; then
                 if [ -z "$_fpm" ] || [ "$_fpm" = 0 ]; then

@@ -41,3 +41,43 @@ _t_run 'running PHP outside the known paths is found' 1 'found via a running pro
     env P2S_TEST_ROOT="$_t_tmp/weird" P2S_PROC_ROOT="$_t_tmp/proc" bash "$_t_script" --no-color
 _t_run 'and it is judged, not just listed' 1 'PHP 8.3.35, fixed in 8.3.36' \
     env P2S_TEST_ROOT="$_t_tmp/weird" P2S_PROC_ROOT="$_t_tmp/proc" bash "$_t_script" --no-color
+
+# A container judged by its package database: same upstream number, different
+# patch state. This is the unit behind the container check.
+_t_deb() { _r=$(_p2s_judge_deb_data "$1" "$2" "$3" "$4" "$2"); if [ "${_r%%|*}" = "$5" ]; then _t_ok "deb $1 $2 $3 = $5"; else _t_bad "deb $1 $2 $3 = $5 (got ${_r%%|*})"; fi; }
+_t_deb noble php8.3 8.3.6-0ubuntu0.24.04.13 8.3.6 ok
+_t_deb noble php8.3 8.3.6-0ubuntu0.24.04.12 8.3.6 vuln
+_t_deb trixie php8.4 8.4.27-1~deb13u1 8.4.27 ok
+_t_deb trixie php8.4 8.4.24-1~deb13u1 8.4.24 vuln
+_t_deb bookworm php8.2 8.2.34-1~deb12u1 8.2.34 vuln
+_t_deb plucky php8.4 8.4.5-1ubuntu1 8.4.5 unknown
+
+# The version comparison must also work where dpkg does not exist.
+_t_cmpdeb() { if [ "$(_p2s_deb_cmp "$1" "$2")" = "$3" ]; then _t_ok "deb_cmp $1 $2 = $3"; else _t_bad "deb_cmp $1 $2 = $3 (got $(_p2s_deb_cmp "$1" "$2"))"; fi; }
+_t_cmpdeb 8.3.6-0ubuntu0.24.04.13 8.3.6-0ubuntu0.24.04.13 0
+_t_cmpdeb 8.3.6-0ubuntu0.24.04.13 8.3.6-0ubuntu0.24.04.12 1
+_t_cmpdeb 8.3.6-0ubuntu0.24.04.9  8.3.6-0ubuntu0.24.04.13 -1
+_t_cmpdeb 8.4.27-1~deb13u1 8.4.24-1~deb13u1 1
+_t_cmpdeb 8.4.27-1~deb13u1 8.4.27-1 -1
+_t_cmpdeb 2:8.1.2-1ubuntu2.28 8.1.2-1ubuntu2.27 1
+
+# Where dpkg exists, the fallback must agree with it.
+if command -v dpkg >/dev/null 2>&1; then
+    _t_pairs="8.3.6-0ubuntu0.24.04.13:8.3.6-0ubuntu0.24.04.12
+8.3.6-0ubuntu0.24.04.9:8.3.6-0ubuntu0.24.04.13
+8.4.27-1~deb13u1:8.4.27-1
+8.4.27-1~deb13u1:8.4.24-1~deb13u1
+8.2.34-1~deb12u1:8.2.34-1~deb12u1
+2:8.1.2-1ubuntu2.28:8.1.2-1ubuntu2.27
+8.1.2-1ubuntu2.28:8.1.2-1ubuntu2.9"
+    _t_agree=1
+    for _t_pair in $_t_pairs; do
+        _t_a=${_t_pair%:*}; _t_b=${_t_pair##*:}
+        if dpkg --compare-versions "$_t_a" ge "$_t_b"; then _t_want=yes; else _t_want=no; fi
+        if [ "$(_p2s_deb_cmp "$_t_a" "$_t_b")" != "-1" ]; then _t_got=yes; else _t_got=no; fi
+        [ "$_t_want" = "$_t_got" ] || { _t_agree=0; echo "        disagreement on $_t_a / $_t_b (dpkg $_t_want, fallback $_t_got)"; }
+    done
+    if [ "$_t_agree" -eq 1 ]; then _t_ok 'fallback agrees with dpkg'; else _t_bad 'fallback agrees with dpkg'; fi
+else
+    echo "  skip  dpkg not installed, cross-check skipped"
+fi
