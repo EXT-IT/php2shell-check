@@ -8,6 +8,16 @@ Changes to the vulnerability data (fixed versions, distribution packages) are
 listed separately from code changes, because they change verdicts without
 changing behaviour.
 
+## [1.2.1] - 2026-10-21
+
+### Fixed
+
+- The WAF and DNS checks now describe the host that answers last. Before, a
+  Cloudflare-proxied apex that redirects to an unproxied `www.` host was
+  reported as "proxied through Cloudflare", although the page itself came
+  straight from the origin. That case is now a warning of its own, and the
+  followed redirect is listed.
+
 ## [1.2.0] - 2026-10-21
 
 From testing against real-world sites (shared hosting, Cloudflare, sites
@@ -73,6 +83,7 @@ not dead sites.
   Ubuntu 26.04 `8.5.4-0ubuntu1.5`, Debian 13 `8.4.27-1~deb13u1` (DSA-6574-1).
 - Debian 12 (php8.2): marked vulnerable, no fix published yet.
 
+[1.2.1]: https://github.com/EXT-IT/php2shell-check/releases/tag/v1.2.1
 [1.2.0]: https://github.com/EXT-IT/php2shell-check/releases/tag/v1.2.0
 [1.1.0]: https://github.com/EXT-IT/php2shell-check/releases/tag/v1.1.0
 [1.0.0]: https://github.com/EXT-IT/php2shell-check/releases/tag/v1.0.0

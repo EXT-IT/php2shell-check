@@ -6,7 +6,7 @@
 
 [![CI](https://img.shields.io/github/actions/workflow/status/EXT-IT/php2shell-check/ci.yml?branch=main&label=CI)](https://github.com/EXT-IT/php2shell-check/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.2.0-green.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.2.1-green.svg)](CHANGELOG.md)
 [![Data](https://img.shields.io/badge/vulnerability%20data-2026--10--21-orange.svg)](#keeping-the-data-current)
 [![Maintained by EXT IT GmbH](https://img.shields.io/badge/maintained%20by-EXT%20IT%20GmbH-0a4f7a.svg)](https://ext-it.tech)
 
@@ -76,8 +76,8 @@ Want to read the script first, or check it against its SHA-256 sum? Download
 a release and run it step by step:
 
 ```sh
-curl -fsSLO https://raw.githubusercontent.com/EXT-IT/php2shell-check/v1.2.0/php2shell-check.sh
-curl -fsSLO https://raw.githubusercontent.com/EXT-IT/php2shell-check/v1.2.0/SHA256SUMS
+curl -fsSLO https://raw.githubusercontent.com/EXT-IT/php2shell-check/v1.2.1/php2shell-check.sh
+curl -fsSLO https://raw.githubusercontent.com/EXT-IT/php2shell-check/v1.2.1/SHA256SUMS
 sha256sum -c SHA256SUMS          # macOS: shasum -a 256 -c SHA256SUMS
 less php2shell-check.sh
 sudo bash php2shell-check.sh https://your-site.example

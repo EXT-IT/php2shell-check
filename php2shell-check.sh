@@ -16,7 +16,7 @@
 set -u
 export LC_ALL=C
 
-P2S_SCRIPT_VERSION='1.2.0'
+P2S_SCRIPT_VERSION='1.2.1'
 P2S_DATA_DATE='2026-10-21'
 P2S_ADVISORY='GHSA-w8hw-w9fx-j79w'
 P2S_ADVISORY_URL='https://github.com/php/php-src/security/advisories/GHSA-w8hw-w9fx-j79w'
@@ -666,12 +666,13 @@ _p2s_curl_reason() {
 # that was not followed), _p2s_f_access (1 if it pointed to Cloudflare
 # Access), _p2s_f_err (reason when nothing answered), _p2s_f_badcert (1 when
 # the certificate did not match and the headers were read without
-# verification) and _p2s_f_http (reason when HTTPS failed and plain HTTP was
-# used instead; only for URLs given without a scheme).
+# verification), _p2s_f_http (reason when HTTPS failed and plain HTTP was
+# used instead; only for URLs given without a scheme), and _p2s_f_last /
+# _p2s_f_lasthost (headers and host of the hop that answered last).
 _p2s_fetch() {
     local _cur=$1 _host=$2 _ua=$3 _auto=${4:-0} _hop=0 _out _rc _next _nh _k=''
     _p2s_f_hdr=''; _p2s_f_foreign=''; _p2s_f_access=0
-    _p2s_f_err=''; _p2s_f_badcert=0; _p2s_f_http=''
+    _p2s_f_err=''; _p2s_f_badcert=0; _p2s_f_http=''; _p2s_f_last=''; _p2s_f_lasthost=$_host
     while [ "$_hop" -le 7 ]; do
         _hop=$(( _hop + 1 ))
         _out=$(curl -sS -o /dev/null -D - -w '\n__p2s_next__ %{redirect_url}\n' $_k \
@@ -694,8 +695,10 @@ _p2s_fetch() {
             break
         fi
         _out=$(printf '%s\n' "$_out" | tr -d '\r')
+        _p2s_f_last=$(printf '%s\n' "$_out" | grep -v '^__p2s_next__' | _p2s_lower | _p2s_clean_lines)
+        _p2s_f_lasthost=$(_p2s_host_of "$_cur")
         _p2s_f_hdr="$_p2s_f_hdr
-$(printf '%s\n' "$_out" | grep -v '^__p2s_next__' | _p2s_lower | _p2s_clean_lines)"
+$_p2s_f_last"
         _next=$(printf '%s\n' "$_out" | grep '^__p2s_next__' | tail -n1 | cut -d' ' -f2- | _p2s_clean_url)
         [ -n "$_next" ] || break
         _nh=$(_p2s_host_of "$_next")
@@ -712,7 +715,7 @@ $(printf '%s\n' "$_out" | grep -v '^__p2s_next__' | _p2s_lower | _p2s_clean_line
 }
 
 _p2s_check_url() {
-    local _url=$1 _host _hdr _code _phpv _verdict _edge='' _ips _ip _cf_ip=0 _non_cf=0 _srv _ua _o _auto=0 _blocked=0
+    local _url=$1 _host _hdr _code _phpv _verdict _edge='' _ips _ip _cf_ip=0 _non_cf=0 _srv _ua _o _auto=0 _blocked=0 _ehdr _ehost
     case "$_url" in http://*|https://*) ;; *) _url="https://$_url"; _auto=1 ;; esac
     _url=$(printf '%s' "$_url" | _p2s_clean_url 300)
     _host=$(_p2s_host_of "$_url")
@@ -742,8 +745,8 @@ _p2s_check_url() {
     # means the application's own headers never reached us.
     case "$_code" in
         403|429|503)
-            if printf '%s\n' "$_hdr" | grep -qE '^cf-mitigated:|^server: *cloudflare' \
-               && ! printf '%s\n' "$_hdr" | grep -qE '^x-powered-by:'; then
+            if printf '%s\n' "$_p2s_f_last" | grep -qE '^cf-mitigated:|^server: *cloudflare' \
+               && ! printf '%s\n' "$_p2s_f_last" | grep -qE '^x-powered-by:'; then
                 _blocked=1
                 _p2s_add info blocked "$_url" "Cloudflare answered with a block or challenge page (HTTP $_code): the site's own headers are not visible, so the PHP banner check says nothing here" \
                     'For sites behind a challenge, run the script on the server itself'
@@ -774,19 +777,25 @@ _p2s_check_url() {
         [ "$_blocked" -eq 1 ] || _p2s_add ok disclosure "$_url" 'no PHP version in the response headers (this alone says nothing about the patch level)'
     fi
 
-    # Edge / WAF detection by headers.
-    _srv=$(printf '%s\n' "$_hdr" | grep -E '^server:' | tail -n1 | cut -d: -f2- | _p2s_clean 60)
-    printf '%s\n' "$_hdr" | grep -qE '^cf-ray:|^server: *cloudflare' && _edge='Cloudflare'
-    [ -z "$_edge" ] && printf '%s\n' "$_hdr" | grep -qE '^x-sucuri-id:|^server: *sucuri' && _edge='Sucuri'
-    [ -z "$_edge" ] && printf '%s\n' "$_hdr" | grep -qE '^x-iinfo:|^x-cdn: *imperva' && _edge='Imperva'
-    [ -z "$_edge" ] && printf '%s\n' "$_hdr" | grep -qE '^x-amz-cf-id:' && _edge='Amazon CloudFront'
-    [ -z "$_edge" ] && printf '%s\n' "$_hdr" | grep -qE '^x-azure-ref:' && _edge='Azure Front Door'
-    [ -z "$_edge" ] && printf '%s\n' "$_hdr" | grep -qE '^server: *akamai|^x-akamai' && _edge='Akamai'
-    [ -z "$_edge" ] && printf '%s\n' "$_hdr" | grep -qE '^x-fastly|^x-served-by: *cache-' && _edge='Fastly'
-    [ -z "$_edge" ] && printf '%s\n' "$_hdr" | grep -qE '^server: *bunnycdn' && _edge='BunnyCDN'
+    # Edge / WAF detection describes the host that answered last: a
+    # Cloudflare-proxied apex that redirects to an unproxied www. host must not
+    # count as protected (seen in the wild).
+    _ehdr=$_p2s_f_last; _ehost=$_p2s_f_lasthost
+    if [ "$_ehost" != "$_host" ]; then
+        _p2s_add info redirect "$_url" "redirects to $_ehost (same site, followed); the WAF and DNS checks below describe $_ehost"
+    fi
+    _srv=$(printf '%s\n' "$_ehdr" | grep -E '^server:' | tail -n1 | cut -d: -f2- | _p2s_clean 60)
+    printf '%s\n' "$_ehdr" | grep -qE '^cf-ray:|^server: *cloudflare' && _edge='Cloudflare'
+    [ -z "$_edge" ] && printf '%s\n' "$_ehdr" | grep -qE '^x-sucuri-id:|^server: *sucuri' && _edge='Sucuri'
+    [ -z "$_edge" ] && printf '%s\n' "$_ehdr" | grep -qE '^x-iinfo:|^x-cdn: *imperva' && _edge='Imperva'
+    [ -z "$_edge" ] && printf '%s\n' "$_ehdr" | grep -qE '^x-amz-cf-id:' && _edge='Amazon CloudFront'
+    [ -z "$_edge" ] && printf '%s\n' "$_ehdr" | grep -qE '^x-azure-ref:' && _edge='Azure Front Door'
+    [ -z "$_edge" ] && printf '%s\n' "$_ehdr" | grep -qE '^server: *akamai|^x-akamai' && _edge='Akamai'
+    [ -z "$_edge" ] && printf '%s\n' "$_ehdr" | grep -qE '^x-fastly|^x-served-by: *cache-' && _edge='Fastly'
+    [ -z "$_edge" ] && printf '%s\n' "$_ehdr" | grep -qE '^server: *bunnycdn' && _edge='BunnyCDN'
 
     # DNS: do the names point at Cloudflare's edge?
-    _ips=$(_p2s_resolve "$_host")
+    _ips=$(_p2s_resolve "$_ehost")
     for _ip in $_ips; do
         if _p2s_is_cloudflare_ip "$_ip"; then _cf_ip=1; else _non_cf=1; fi
     done
@@ -797,7 +806,7 @@ _p2s_check_url() {
                 _p2s_add ok waf "$_url" "proxied through Cloudflare (header and DNS); Cloudflare says it has deployed WAF rules for these CVEs on all plans, Free included" \
                     'Keep the Cloudflare Managed/Free ruleset enabled and make sure the origin only accepts Cloudflare (tunnel or firewall)'
             elif [ "$_non_cf" -eq 1 ] && [ "$_cf_ip" -eq 1 ]; then
-                _p2s_add warn waf "$_url" "Cloudflare answered, but $_host also resolves to non-Cloudflare addresses ($(printf '%s' "$_ips" | tr '\n' ' ' | _p2s_clean 120))" \
+                _p2s_add warn waf "$_url" "Cloudflare answered, but $_ehost also resolves to non-Cloudflare addresses ($(printf '%s' "$_ips" | tr '\n' ' ' | _p2s_clean 120))" \
                     'Every DNS record of the site should be proxied (orange cloud), otherwise part of the traffic skips the WAF'
             else
                 _p2s_add ok waf "$_url" 'Cloudflare headers present (DNS could not be confirmed from here)' \
@@ -805,7 +814,7 @@ _p2s_check_url() {
             fi ;;
         '')
             if [ "$_cf_ip" -eq 1 ]; then
-                _p2s_add unknown waf "$_url" "$_host resolves to Cloudflare, but the response carried no Cloudflare headers"
+                _p2s_add unknown waf "$_url" "$_ehost resolves to Cloudflare, but the response carried no Cloudflare headers"
             else
                 _p2s_add info waf "$_url" "no WAF or CDN detected${_srv:+ (server:$_srv)}: requests reach the server unfiltered" \
                     'If you cannot patch today, put the site behind a WAF that has rules for CVE-2026-109618/109619'
@@ -814,6 +823,13 @@ _p2s_check_url() {
             _p2s_add info waf "$_url" "behind $_edge. Whether it filters these CVEs is not visible from outside" \
                 "Ask $_edge whether rules for CVE-2026-109618/109619 are active for your property" ;;
     esac
+    # The first hop came through Cloudflare, the host that actually serves the
+    # site did not: protection on the apex only.
+    if [ "$_ehost" != "$_host" ] && [ "$_edge" != Cloudflare ] \
+       && printf '%s\n' "$_hdr" | grep -qE '^cf-ray:|^server: *cloudflare'; then
+        _p2s_add warn waf "$_url" "only $_host goes through Cloudflare; $_ehost, which serves the site, does not" \
+            "Proxy the DNS record of $_ehost through Cloudflare as well (orange cloud)"
+    fi
     case "$_srv" in
         *litespeed*) _p2s_add info server "$_url" 'LiteSpeed detected: LSAPI is named as affected in the advisory' ;;
         *frankenphp*|*caddy*) _p2s_add info server "$_url" 'Caddy/FrankenPHP detected: the advisory lists FrankenPHP as unclear' ;;

@@ -19,3 +19,14 @@ if [ -n "${_t_base:-}" ]; then
 else
     echo "  skip  fixture server not available"
 fi
+
+if [ -n "${_t_base:-}" ]; then
+    # The redirect stays on 127.0.0.1, so the "only the first host" warning
+    # cannot fire here; what must hold is that the WAF verdict follows the
+    # final hop, which carries no Cloudflare headers.
+    if bash "$_t_script" -r --no-color "$_t_base/cf-redirect" | grep -q 'OK \] waf'; then
+        _t_bad 'WAF verdict comes from the final hop, not the first'
+    else
+        _t_ok 'WAF verdict comes from the final hop, not the first'
+    fi
+fi

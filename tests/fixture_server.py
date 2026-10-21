@@ -37,6 +37,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._answer(403, [("Server", "cloudflare"), ("CF-RAY", "8f00000000000001-FRA"),
                                ("cf-mitigated", "challenge")])
             return
+        if self.path == "/cf-redirect":
+            self._answer(301, [("Server", "cloudflare"), ("CF-RAY", "8f00000000000002-FRA"),
+                               ("Location", "/vulnerable")])
+            return
         if self.path == "/foreign-count":
             self._answer(200, [("X-Count", str(FOREIGN_HITS[0]))])
             return
