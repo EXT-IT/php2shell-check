@@ -6,7 +6,7 @@
 
 [![CI](https://img.shields.io/github/actions/workflow/status/EXT-IT/php2shell-check/ci.yml?branch=main&label=CI)](https://github.com/EXT-IT/php2shell-check/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.2.1-green.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.3.0-green.svg)](CHANGELOG.md)
 [![Data](https://img.shields.io/badge/vulnerability%20data-2026--10--21-orange.svg)](#keeping-the-data-current)
 [![Maintained by EXT IT GmbH](https://img.shields.io/badge/maintained%20by-EXT%20IT%20GmbH-0a4f7a.svg)](https://ext-it.tech)
 
@@ -25,6 +25,15 @@ reads package databases, asks each PHP binary for its version and settings,
 and sends one ordinary GET request to each URL you give it, following
 redirects only on that same host. No exploit traffic, nothing written to
 disk.
+
+> **Run it on the server.** That is the only way to get a definite answer.
+> There the script reads the real versions of every PHP installation, every
+> container and every FPM pool. A check from outside sees only what a site
+> chooses to put in its headers, which on most sites is nothing at all. The
+> script never turns that silence into a clean result: a website whose patch
+> level it cannot determine comes back as **undecided**, with a pointer to
+> run it on the server, and never as "not vulnerable". Every run ends with a
+> "How reliable this is" block that says which of the two it was.
 
 ```console
 $ sudo ./php2shell-check.sh https://www.example.com
@@ -49,6 +58,10 @@ Website https://www.example.com
 
 Summary  1 vulnerable, 0 undecided, 2 warnings, 2 ok
   VULNERABLE  at least one PHP runtime needs an update now.
+
+How reliable this is
+  Ran on this host: the package and container versions above are read
+  from the system itself. That is the definite answer for this server.
 ```
 
 ## Run it
@@ -85,7 +98,8 @@ sudo bash php2shell-check.sh https://your-site.example
 ```
 
 Without root it still runs, but it cannot see containers or other users'
-processes and says so in the output.
+processes and says so in the output. Checking only websites is useful for a
+quick overview of a fleet, but it never replaces a run on each server.
 
 | Option | Effect |
 |---|---|
@@ -106,7 +120,7 @@ On the server:
 
 | Check | What it looks at |
 |---|---|
-| `php-binary` | every PHP in `/usr/bin`, `/usr/sbin`, `/usr/local`, Plesk (`/opt/plesk/php`), cPanel EasyApache (`/opt/cpanel/ea-php*`), CloudLinux alt-php, Remi, LiteSpeed. Debian and Ubuntu packages are judged by package version against the distribution's fix; everything else by upstream version |
+| `php-binary` | every PHP in `/usr/bin`, `/usr/sbin`, `/usr/local`, Plesk (`/opt/plesk/php`), cPanel EasyApache (`/opt/cpanel/ea-php*`), CloudLinux alt-php, Remi, LiteSpeed, **plus every PHP that is currently running**, taken from the process list, so a build in an unusual path is not missed. Debian and Ubuntu packages are judged by package version against the distribution's fix; everything else by upstream version |
 | `container` | PHP inside every running Docker or Podman container |
 | `mitigation` | the temporary settings from the advisory: `session.upload_progress.enabled`, `expose_php`, `post_max_size` against `memory_limit`, `max_input_nesting_level`, `fatal_error_backtraces`. On Debian layouts it reads the FPM and Apache `php.ini`, not just the CLI one, because they differ |
 | `fpm-pool` | `pm.max_requests` in every PHP-FPM pool |
@@ -123,8 +137,9 @@ For each URL:
 | `tls` | HTTPS that does not work (a URL given without `https://` is then checked over plain HTTP) or a certificate that does not match the name. The headers are read either way |
 | `blocked` | Cloudflare answering with a block or challenge page instead of the site. The banner check cannot say anything then, and the script says so instead of reporting a clean result |
 | `php-banner` | a PHP version in `X-Powered-By`, judged like a local version. A distribution's frozen number such as `8.3.6` comes back as *undecided*, for the reason in the first paragraph |
-| `disclosure` | whether the site announces its PHP version at all |
+| `disclosure` | whether the site announces its PHP version at all. Hiding the version makes this check quiet; it patches nothing |
 | `waf` | Cloudflare (by `cf-ray` header and by checking every DNS record against Cloudflare's published IP ranges), Sucuri, Imperva, CloudFront, Azure Front Door, Akamai, Fastly, BunnyCDN. A record that points past Cloudflare is flagged, because that traffic skips the WAF |
+| `php-level` | the patch level could not be determined from outside: no version in the headers, the edge answered instead of the site, or a version number that distributions freeze. Keeps the result undecided instead of clean, and says where the definite answer comes from |
 | `access` | a redirect to a Cloudflare Access login, which stops requests without a login before they reach PHP |
 | `redirect` | a redirect to another host. It is reported and not followed, so the script only ever talks to the host you named (or its `www.` variant) |
 | `origin` | with `--origin`, whether the server answers directly. If it does, anyone who finds the IP can go around the WAF |
@@ -185,6 +200,9 @@ Alpine and macOS (bash 3.2), and checks `SHA256SUMS` against the script.
 
 ## Background
 
+- Why `php -v` is not enough, the fixed versions per distribution and the four
+  steps to fix it, in German:
+  [ext-it.tech/php2shell](https://ext-it.tech/php2shell/)
 - PHP advisory: [GHSA-w8hw-w9fx-j79w](https://github.com/php/php-src/security/advisories/GHSA-w8hw-w9fx-j79w)
 - heise online, 21.10.2026: [php2shell: Kritische Sicherheitslücken erlauben Codeeinschleusung in PHP](https://www.heise.de/news/php2shell-Kritische-Sicherheitsluecken-erlauben-Codeeinschleusung-in-PHP-11492938.html)
 - Cloudflare IP ranges: <https://www.cloudflare.com/ips/>

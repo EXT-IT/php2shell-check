@@ -17,6 +17,8 @@ ROUTES = {
     "/litespeed": [("Server", "LiteSpeed")],
     "/escape": [("X-Powered-By", "PHP/8.3.35\x1b]0;pwned\x07")],
     "/plain": [],
+    "/phpsess": [("Set-Cookie", "PHPSESSID=abc123; path=/")],
+    "/wordpress": [("Link", "<https://example.invalid/wp-json/>; rel=\"https://api.w.org/\"")],
     "/redirect-same": [("Location", "/vulnerable")],
     "/redirect-access": [("Location", "https://team.cloudflareaccess.com/cdn-cgi/access/login/x")],
 }

@@ -16,11 +16,12 @@
 set -u
 export LC_ALL=C
 
-P2S_SCRIPT_VERSION='1.2.1'
+P2S_SCRIPT_VERSION='1.3.0'
 P2S_DATA_DATE='2026-10-21'
 P2S_ADVISORY='GHSA-w8hw-w9fx-j79w'
 P2S_ADVISORY_URL='https://github.com/php/php-src/security/advisories/GHSA-w8hw-w9fx-j79w'
 P2S_REPO_URL='https://github.com/EXT-IT/php2shell-check'
+P2S_INFO_URL='https://ext-it.tech/php2shell/'
 
 # ---------------------------------------------------------------------------
 # Vulnerability data. Update these tables when new fixes are published.
@@ -76,8 +77,10 @@ Usage: php2shell-check.sh [options] [URL ...]
 Checks a server and/or websites for exposure to the php2shell vulnerabilities
 CVE-2026-109618 and CVE-2026-109619 (GHSA-w8hw-w9fx-j79w). Read-only.
 
-Run it on the server (as root) to check every PHP installation and container.
-Add URLs to also check what the sites reveal and whether a WAF sits in front.
+Run it ON THE SERVER (as root) for a definite answer: there it reads the real
+versions of every PHP installation and container. Add URLs to also check what
+the sites reveal from outside and whether a WAF sits in front. A check from
+outside alone can never confirm that a server is patched.
 
 Options:
   -r, --remote-only    only check the given URLs (works without root, on macOS)
@@ -155,8 +158,10 @@ fi
 [ -t 1 ] || _opt_color=0
 [ "$_opt_json" -eq 1 ] && _opt_color=0
 
-# Test hook: prefix for every scanned path. Not for normal use.
+# Test hooks: path prefix for every scanned file, and the proc filesystem to
+# read process information from. Not for normal use.
 _p2s_root=${P2S_TEST_ROOT:-}
+_p2s_proc=${P2S_PROC_ROOT:-/proc}
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -399,8 +404,62 @@ _p2s_php_version_of() {   # binary -> x.y.z or empty
     _p2s_is_version "$_v" && echo "$_v"
 }
 
+# Judge one PHP binary. $2 is a note for the report (how it was found).
+_p2s_check_one_binary() {
+    local _b=$1 _note=${2:-} _real _v _pkg _verdict _dir _sapi
+    [ -f "$_b" ] && [ -x "$_b" ] || return 1
+    _real=$(readlink -f "$_b" 2>/dev/null || echo "$_b")
+    case "$_p2s_seen" in *" $_real "*) return 1 ;; esac
+    _p2s_seen="$_p2s_seen$_real "
+    _v=$(_p2s_php_version_of "$_b")
+    [ -n "$_v" ] || return 1
+    _pkg=''
+    if [ -z "$_p2s_root" ] && command -v dpkg-query >/dev/null 2>&1; then
+        _pkg=$(dpkg-query -S "$_real" 2>/dev/null | head -n1 | cut -d: -f1)
+    fi
+    if [ -n "$_pkg" ]; then
+        _verdict=$(_p2s_judge_deb "$_pkg" "$_v")
+    elif [ -z "$_p2s_root" ] && command -v rpm >/dev/null 2>&1 && rpm -qf "$_real" >/dev/null 2>&1; then
+        _verdict=$(_p2s_judge_rpm "$_real" "$_v")
+    else
+        _verdict=$(_p2s_judge_upstream "$_v")
+    fi
+    _p2s_add_verdict php-binary "${_b#"$_p2s_root"}$_note" "$_verdict"
+    case "$_b" in
+        *php-fpm*|*lsphp*) ;;
+        *)
+            _p2s_check_ini "${_b#"$_p2s_root"} (CLI)" "$_b"
+            # Debian layout: evaluate the FPM / Apache php.ini with this binary.
+            _dir="$_p2s_root/etc/php/${_v%.*}"
+            for _sapi in fpm apache2 cgi; do
+                [ -r "$_dir/$_sapi/php.ini" ] || continue
+                PHP_INI_SCAN_DIR="$_dir/$_sapi/conf.d" _p2s_check_ini \
+                    "${_b#"$_p2s_root"} ($_sapi php.ini)" "$_b" -c "$_dir/$_sapi/php.ini"
+            done ;;
+    esac
+    return 0
+}
+
+# PHP paths taken from the running processes. A build in an unusual place
+# (/opt/php-8.3, a vendor bundle) is invisible to the path list below, and
+# reporting "no PHP found" on a host that is serving PHP right now is the
+# worst mistake this script could make.
+_p2s_running_php_paths() {
+    local _p _e
+    [ -z "$_p2s_root" ] || [ -n "${P2S_PROC_ROOT:-}" ] || return 0
+    [ -d "$_p2s_proc" ] || return 0
+    for _p in "$_p2s_proc"/[0-9]*; do
+        _e=$(readlink "$_p/exe" 2>/dev/null) || continue
+        _e=${_e% (deleted)}
+        case "$_e" in
+            */php|*/php[0-9]*|*/php-fpm|*/php-fpm[0-9]*|*/lsphp|*/lsphp[0-9]*)
+                [ -f "$_e" ] && printf '%s\n' "$_e" ;;
+        esac
+    done | sort -u
+}
+
 _p2s_check_binaries() {
-    local _b _real _v _pkg _verdict _found=0 _dir _sapi
+    local _b _found=0
     _p2s_section 'PHP installations on this host'
     for _b in "$_p2s_root"/usr/bin/php "$_p2s_root"/usr/bin/php[0-9]* \
               "$_p2s_root"/usr/sbin/php-fpm* "$_p2s_root"/usr/local/bin/php \
@@ -408,39 +467,16 @@ _p2s_check_binaries() {
               "$_p2s_root"/opt/plesk/php/*/bin/php "$_p2s_root"/opt/cpanel/ea-php*/root/usr/bin/php \
               "$_p2s_root"/opt/alt/php*/usr/bin/php "$_p2s_root"/opt/remi/php*/root/usr/bin/php \
               "$_p2s_root"/usr/local/lsws/lsphp*/bin/php; do
-        [ -f "$_b" ] && [ -x "$_b" ] || continue
-        _real=$(readlink -f "$_b" 2>/dev/null || echo "$_b")
-        case "$_p2s_seen" in *" $_real "*) continue ;; esac
-        _p2s_seen="$_p2s_seen$_real "
-        _v=$(_p2s_php_version_of "$_b")
-        [ -n "$_v" ] || continue
-        _found=1
-        _pkg=''
-        if [ -z "$_p2s_root" ] && command -v dpkg-query >/dev/null 2>&1; then
-            _pkg=$(dpkg-query -S "$_real" 2>/dev/null | head -n1 | cut -d: -f1)
-        fi
-        if [ -n "$_pkg" ]; then
-            _verdict=$(_p2s_judge_deb "$_pkg" "$_v")
-        elif [ -z "$_p2s_root" ] && command -v rpm >/dev/null 2>&1 && rpm -qf "$_real" >/dev/null 2>&1; then
-            _verdict=$(_p2s_judge_rpm "$_real" "$_v")
-        else
-            _verdict=$(_p2s_judge_upstream "$_v")
-        fi
-        _p2s_add_verdict php-binary "${_b#"$_p2s_root"}" "$_verdict"
-        case "$_b" in
-            *php-fpm*|*lsphp*) ;;
-            *)
-                _p2s_check_ini "${_b#"$_p2s_root"} (CLI)" "$_b"
-                # Debian layout: evaluate the FPM / Apache php.ini with this binary.
-                _dir="$_p2s_root/etc/php/${_v%.*}"
-                for _sapi in fpm apache2 cgi; do
-                    [ -r "$_dir/$_sapi/php.ini" ] || continue
-                    PHP_INI_SCAN_DIR="$_dir/$_sapi/conf.d" _p2s_check_ini \
-                        "${_b#"$_p2s_root"} ($_sapi php.ini)" "$_b" -c "$_dir/$_sapi/php.ini"
-                done ;;
-        esac
+        _p2s_check_one_binary "$_b" && _found=1
     done
-    [ "$_found" -eq 1 ] || _p2s_add info php-binary 'host' 'no PHP installation found in the usual locations'
+    # Second pass: whatever is actually running, wherever it lives.
+    for _b in $(_p2s_running_php_paths); do
+        _p2s_check_one_binary "$_b" ' (found via a running process)' && _found=1
+    done
+    if [ "$_found" -eq 0 ]; then
+        _p2s_add info php-binary 'host' 'no PHP installation found in the usual locations and none running' \
+            'If this host serves PHP from an unusual path, check that path by hand'
+    fi
 }
 
 _p2s_check_fpm_pools() {
@@ -715,7 +751,7 @@ $_p2s_f_last"
 }
 
 _p2s_check_url() {
-    local _url=$1 _host _hdr _code _phpv _verdict _edge='' _ips _ip _cf_ip=0 _non_cf=0 _srv _ua _o _auto=0 _blocked=0 _ehdr _ehost
+    local _url=$1 _host _hdr _code _phpv _verdict _edge='' _ips _ip _cf_ip=0 _non_cf=0 _srv _ua _o _auto=0 _blocked=0 _ehdr _ehost _sig
     case "$_url" in http://*|https://*) ;; *) _url="https://$_url"; _auto=1 ;; esac
     _url=$(printf '%s' "$_url" | _p2s_clean_url 300)
     _host=$(_p2s_host_of "$_url")
@@ -730,8 +766,9 @@ _p2s_check_url() {
     _hdr=$_p2s_f_hdr
     _code=$(printf '%s\n' "$_hdr" | grep -E '^http/' | tail -n1 | awk '{print $2}')
     if [ -z "$_code" ]; then
+        _p2s_urls_seen=$(( _p2s_urls_seen + 1 )); _p2s_urls_open=$(( _p2s_urls_open + 1 ))
         _p2s_add unknown remote "$_url" "no HTTP answer: ${_p2s_f_err:-unknown error}${_p2s_f_http:+ (HTTPS: $_p2s_f_http)}" \
-            'A site that does not answer cannot be judged from outside; run the script on its server'
+            'Run this script on the server itself: a site that does not answer cannot be judged from outside'
         return
     fi
     _p2s_add info remote "$_url" "reachable, last HTTP status ${_code:-?}"
@@ -760,21 +797,50 @@ _p2s_check_url() {
             'Run the check again with the target URL if that site is yours'
     fi
 
+    # Does the site run PHP at all? Signals that cost no extra request. They
+    # say "PHP is here", never which version, so they can only ever turn a
+    # silent result into a clearer one.
+    _sig=''
+    printf '%s\n' "$_hdr" | grep -qE '^set-cookie: *phpsessid=' && _sig="$_sig PHPSESSID cookie,"
+    printf '%s\n' "$_hdr" | grep -qE '^x-powered-by: *php' && _sig="$_sig X-Powered-By,"
+    printf '%s\n' "$_hdr" | grep -qE '^x-powered-by: *plesklin' && _sig="$_sig Plesk,"
+    printf '%s\n' "$_hdr" | grep -qE '^link:.*wp-json|^x-pingback:' && _sig="$_sig WordPress,"
+    printf '%s\n' "$_hdr" | grep -qE '^set-cookie: *(laravel_session|xsrf-token)=' && _sig="$_sig Laravel,"
+    printf '%s\n' "$_hdr" | grep -qE '^x-drupal-|^x-generator: *drupal' && _sig="$_sig Drupal,"
+    printf '%s\n' "$_hdr" | grep -qE '^x-litespeed-cache|^x-turbo-charged-by: *litespeed' && _sig="$_sig LiteSpeed cache,"
+    _sig=${_sig%,}
+
     # PHP version banner (expose_php).
     _phpv=$(printf '%s\n' "$_hdr" | grep -oE 'php/[0-9]+\.[0-9]+\.[0-9]+' | head -n1 | cut -d/ -f2)
+    _p2s_urls_seen=$(( _p2s_urls_seen + 1 ))
     if [ -n "$_phpv" ]; then
         case "$_p2s_frozen_versions" in
             *" $_phpv "*)
-                _p2s_add unknown php-banner "$_url" "announces PHP $_phpv, a distribution build that may contain the backported fix" \
-                    'Run this script on the server to check the package version' ;;
+                _p2s_urls_open=$(( _p2s_urls_open + 1 ))
+                _p2s_add unknown php-banner "$_url" "announces PHP $_phpv, a version number that distributions keep while backporting the fix, so it cannot be judged from outside" \
+                    'Run this script on the server itself: there the package version gives a definite answer' ;;
             *)
                 _verdict=$(_p2s_judge_upstream "$_phpv")
+                case "${_verdict%%|*}" in unknown) _p2s_urls_open=$(( _p2s_urls_open + 1 )) ;; esac
                 _p2s_add_verdict php-banner "$_url" "${_verdict%%|*}|X-Powered-By: $(printf '%s' "$_verdict" | cut -d'|' -f2-)" ;;
         esac
         _p2s_add warn disclosure "$_url" "the PHP version is visible to everyone (X-Powered-By: PHP/$_phpv)" \
             'Set expose_php=0 so scanners cannot pick vulnerable targets by header'
     else
-        [ "$_blocked" -eq 1 ] || _p2s_add ok disclosure "$_url" 'no PHP version in the response headers (this alone says nothing about the patch level)'
+        # No version in the headers is not a clean bill of health, and must not
+        # look like one: this stays undecided.
+        _p2s_urls_open=$(( _p2s_urls_open + 1 ))
+        if [ "$_blocked" -eq 1 ]; then
+            _p2s_add unknown php-level "$_url" 'the edge answered instead of the site, so no version is visible' \
+                'Run this script on the server itself: there the package and container versions give a definite answer'
+        elif [ -n "$_sig" ]; then
+            _p2s_add unknown php-level "$_url" "runs PHP (signal:$_sig) but does not reveal the version, so the patch level cannot be judged from outside" \
+                'Run this script on the server itself: there the package and container versions give a definite answer'
+        else
+            _p2s_add unknown php-level "$_url" 'no PHP version and no PHP signal in the headers; this says nothing about the patch level' \
+                'Run this script on the server itself: there the package and container versions give a definite answer'
+        fi
+        [ "$_blocked" -eq 1 ] || _p2s_add ok disclosure "$_url" 'the response headers do not reveal the PHP version'
     fi
 
     # Edge / WAF detection describes the host that answered last: a
@@ -861,6 +927,9 @@ if [ "${P2S_SOURCE_ONLY:-0}" = 1 ]; then
 fi
 
 _p2s_behind_cf=0
+_p2s_urls_seen=0
+_p2s_urls_open=0
+_p2s_local_ran=0
 _found_ct=0
 _p2s_hostname=$( (hostname -f 2>/dev/null || hostname) | _p2s_clean 80)
 _p2s_os=$(_p2s_os_field PRETTY_NAME | _p2s_clean 80)
@@ -881,6 +950,7 @@ if [ "$_opt_remote_only" -eq 0 ]; then
             _p2s_add unknown privileges "$_p2s_hostname" 'not running as root: containers, processes and some logs may be invisible' \
                 'Run again with sudo for a complete result'
         fi
+        _p2s_local_ran=1
         _p2s_check_binaries
         _p2s_check_fpm_pools
         [ "$_opt_containers" -eq 1 ] && [ -z "$_p2s_root" ] && _p2s_check_containers
@@ -927,6 +997,9 @@ fi
 if [ "$_opt_json" -eq 1 ]; then
     printf '{"tool":"php2shell-check","version":"%s","data_as_of":"%s","advisory":"%s",' "$P2S_SCRIPT_VERSION" "$P2S_DATA_DATE" "$P2S_ADVISORY"
     printf '"host":"%s","os":"%s","result":"%s",' "$(_p2s_json_esc "$_p2s_hostname")" "$(_p2s_json_esc "$_p2s_os")" "$_p2s_result"
+    printf '"scope":{"host_checked":%s,"as_root":%s,"urls_checked":%d,"urls_undecided":%d},' \
+        "$( [ "$_p2s_local_ran" -eq 1 ] && echo true || echo false )" \
+        "$( [ "$(id -u)" -eq 0 ] && echo true || echo false )" "$_p2s_urls_seen" "$_p2s_urls_open"
     printf '"counts":{"vulnerable":%d,"undecided":%d,"warning":%d,"ok":%d},"findings":[' "$_n_vuln" "$_n_unknown" "$_n_warn" "$_n_ok"
     _i=0
     while [ "$_i" -lt "${#_f_status[@]}" ]; do
@@ -945,11 +1018,30 @@ case "$_p2s_result" in
     undecided)      printf '  %sUNDECIDED%s   some results could not be judged, see the ?? lines.\n' "$_c_yel" "$_c_off" ;;
     not-vulnerable) printf '  %sNO VULNERABLE PHP FOUND%s  in what this script can see.\n' "$_c_grn" "$_c_off" ;;
 esac
+
+# What the verdict above is worth. A run on the server reads the real
+# versions; from outside only what a site chooses to reveal is visible.
+printf '\n%sHow reliable this is%s\n' "$_c_bold" "$_c_off"
+if [ "$_p2s_local_ran" -eq 1 ]; then
+    printf '  Ran on this host: the package and container versions above are read\n'
+    printf '  from the system itself. That is the definite answer for this server.\n'
+    if [ "$(id -u)" -ne 0 ] && [ -z "$_p2s_root" ]; then
+        printf '  %sNot run as root, so containers and other users processes stayed hidden.%s\n' "$_c_yel" "$_c_off"
+    fi
+else
+    printf '  Websites only. From outside, a site shows at most the version it\n'
+    printf '  chooses to reveal, so this run cannot confirm a patch level.\n'
+    printf '  %sFor a definite answer, run this script on the server that hosts the site:%s\n' "$_c_bold" "$_c_off"
+    printf '    sudo bash php2shell-check.sh\n'
+fi
+if [ "$_p2s_urls_seen" -gt 0 ] && [ "$_p2s_urls_open" -gt 0 ]; then
+    printf '  %d of %d websites could not be judged from outside.\n' "$_p2s_urls_open" "$_p2s_urls_seen"
+fi
 _p2s_hints="$_p2s_hints_1$_p2s_hints_2$_p2s_hints_3"
 if [ -n "$_p2s_hints" ]; then
     printf '\n%sNext steps%s\n' "$_c_bold" "$_c_off"
     printf '%s\n' "$_p2s_hints" | tr '|' '\n' | grep -v '^$' | awk '!s[$0]++' | head -n 10 | sed 's/^/  - /'
 fi
-printf '\n%sAdvisory: %s\nTool:     %s\n          provided as is, without warranty or support (MIT, see LICENSE)%s\n' \
-    "$_c_dim" "$P2S_ADVISORY_URL" "$P2S_REPO_URL" "$_c_off"
+printf '\n%sAdvisory:   %s\nTool:       %s\nBackground: %s (German)\n            provided as is, without warranty or support (MIT, see LICENSE)%s\n' \
+    "$_c_dim" "$P2S_ADVISORY_URL" "$P2S_REPO_URL" "$P2S_INFO_URL" "$_c_off"
 exit "$_p2s_rc"

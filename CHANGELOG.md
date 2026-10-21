@@ -8,6 +8,41 @@ Changes to the vulnerability data (fixed versions, distribution packages) are
 listed separately from code changes, because they change verdicts without
 changing behaviour.
 
+## [1.3.0] - 2026-10-21
+
+The theme of this release is not claiming more than the script can know.
+
+### Changed
+
+- A website whose patch level cannot be determined is now **undecided**
+  (exit 2), not "no vulnerable PHP found" (exit 0). That covers a site
+  without a version header, an edge that answers with a block page, and a
+  version number that distributions freeze while backporting. Hiding
+  `X-Powered-By` no longer produces a green result.
+- Every run ends with a "How reliable this is" block: a run on the host
+  states that the versions were read from the system itself, a run against
+  websites states that it cannot confirm a patch level and names the command
+  to run on the server.
+- `--help` and the README say up front that a definite answer comes from
+  running the script on the server.
+
+### Added
+
+- `php-binary` also covers every PHP that is currently running, taken from
+  the process list. A build in an unusual path (`/opt/php-8.3/bin/php`, a
+  vendor bundle) used to end up as "no PHP installation found".
+- `php-level`: states why a site could not be judged from outside.
+- PHP is now recognised without a version from PHPSESSID, WordPress,
+  Laravel, Drupal, Plesk and LiteSpeed signals, so "nothing visible" and
+  "PHP is here but silent" are no longer the same result.
+- `--json` carries a `scope` object: host checked, run as root, URLs checked
+  and how many of them stayed undecided.
+
+### Fixed
+
+- A blocked edge response no longer counts as "the headers do not reveal the
+  version": the site was never reached.
+
 ## [1.2.1] - 2026-10-21
 
 ### Fixed
@@ -83,6 +118,7 @@ not dead sites.
   Ubuntu 26.04 `8.5.4-0ubuntu1.5`, Debian 13 `8.4.27-1~deb13u1` (DSA-6574-1).
 - Debian 12 (php8.2): marked vulnerable, no fix published yet.
 
+[1.3.0]: https://github.com/EXT-IT/php2shell-check/releases/tag/v1.3.0
 [1.2.1]: https://github.com/EXT-IT/php2shell-check/releases/tag/v1.2.1
 [1.2.0]: https://github.com/EXT-IT/php2shell-check/releases/tag/v1.2.0
 [1.1.0]: https://github.com/EXT-IT/php2shell-check/releases/tag/v1.1.0

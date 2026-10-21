@@ -8,14 +8,14 @@ _t_run 'IPv6 range is refused'         3 'address range'   bash "$_t_script" -r 
 
 if [ -n "${_t_base:-}" ]; then
     _t_run 'same-host redirect is followed'   1 'VULN\] php-banner' bash "$_t_script" -r --no-color "$_t_base/redirect-same"
-    _t_run 'foreign redirect is not followed' 0 'not followed'      bash "$_t_script" -r --no-color "$_t_base/redirect-foreign"
+    _t_run 'foreign redirect is not followed' 2 'not followed'      bash "$_t_script" -r --no-color "$_t_base/redirect-foreign"
     _t_count=$(curl -s -D - -o /dev/null "$_t_base/foreign-count" | tr -d '\r' | awk -F': ' 'tolower($1)=="x-count"{print $2}')
     if [ "$_t_count" = 0 ]; then
         _t_ok 'foreign redirect target received no request'
     else
         _t_bad "foreign redirect target received no request (count: ${_t_count:-?})"
     fi
-    _t_run 'Cloudflare Access is recognised'  0 'OK \] access'     bash "$_t_script" -r --no-color "$_t_base/redirect-access"
+    _t_run 'Cloudflare Access is recognised'  2 'OK \] access'     bash "$_t_script" -r --no-color "$_t_base/redirect-access"
 else
     echo "  skip  fixture server not available"
 fi

@@ -133,15 +133,15 @@ if command -v python3 >/dev/null 2>&1 && command -v curl >/dev/null 2>&1; then
     _t_base="http://127.0.0.1:$(cat "$_t_tmp/port")"
     _t_run 'banner 8.3.35 is vulnerable'   1 'VULN\] php-banner'   bash "$_t_script" -r --no-color "$_t_base/vulnerable"
     _t_run 'banner 8.3.36 is fine'         0 'OK \] php-banner'    bash "$_t_script" -r --no-color "$_t_base/fixed"
-    _t_run 'frozen distro banner is undecided' 2 'backported fix' bash "$_t_script" -r --no-color "$_t_base/distro"
+    _t_run 'frozen distro banner is undecided' 2 'cannot be judged' bash "$_t_script" -r --no-color "$_t_base/distro"
     _t_run 'EOL banner is vulnerable'      1 'no fixed release'    bash "$_t_script" -r --no-color "$_t_base/eol"
     _t_run 'version disclosure warns'      1 'WARN\] disclosure'   bash "$_t_script" -r --no-color "$_t_base/vulnerable"
-    _t_run 'Cloudflare headers detected'   0 'OK \] waf'           bash "$_t_script" -r --no-color "$_t_base/cloudflare"
-    _t_run 'Sucuri detected'               0 'behind Sucuri'       bash "$_t_script" -r --no-color "$_t_base/sucuri"
-    _t_run 'LiteSpeed noted'               0 'LSAPI'               bash "$_t_script" -r --no-color "$_t_base/litespeed"
-    _t_run 'no WAF reported'               0 'no WAF or CDN'       bash "$_t_script" -r --no-color "$_t_base/plain"
+    _t_run 'Cloudflare headers detected'   2 'OK \] waf'           bash "$_t_script" -r --no-color "$_t_base/cloudflare"
+    _t_run 'Sucuri detected'               2 'behind Sucuri'       bash "$_t_script" -r --no-color "$_t_base/sucuri"
+    _t_run 'LiteSpeed noted'               2 'LSAPI'               bash "$_t_script" -r --no-color "$_t_base/litespeed"
+    _t_run 'no WAF reported'               2 'no WAF or CDN'       bash "$_t_script" -r --no-color "$_t_base/plain"
     _t_run 'unreachable site is undecided' 2 'no HTTP answer'    bash "$_t_script" -r --no-color "http://127.0.0.1:9/"
-    _t_run 'origin reachable warns'        0 'WARN\] origin'       bash "$_t_script" -r --no-color --origin 127.0.0.1 "$_t_base/plain"
+    _t_run 'origin reachable warns'        2 'WARN\] origin'       bash "$_t_script" -r --no-color --origin 127.0.0.1 "$_t_base/plain"
     if bash "$_t_script" -r --no-color "$_t_base/escape" | LC_ALL=C grep -q "$(printf '\033')"; then
         _t_bad 'escape sequences from headers are stripped'
     else

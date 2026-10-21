@@ -10,7 +10,7 @@ if [ -n "${_t_base:-}" ]; then
     # HTTP, so the TLS handshake fails and the HTTP fallback must take over.
     _t_run 'URL without scheme falls back to HTTP' 1 'checked over plain HTTP' bash "$_t_script" -r --no-color "$_t_hostport/vulnerable"
     _t_run 'explicit https:// gets no fallback'    2 'no HTTP answer'          bash "$_t_script" -r --no-color "https://$_t_hostport/vulnerable"
-    _t_run 'Cloudflare challenge is reported'      0 'block or challenge'      bash "$_t_script" -r --no-color "$_t_base/cf-blocked"
+    _t_run 'Cloudflare challenge is reported'      2 'block or challenge'      bash "$_t_script" -r --no-color "$_t_base/cf-blocked"
     if bash "$_t_script" -r --no-color "$_t_base/cf-blocked" | grep -q 'OK \] disclosure'; then
         _t_bad 'blocked page is not called clean'
     else
