@@ -6,7 +6,7 @@
 
 [![CI](https://img.shields.io/github/actions/workflow/status/EXT-IT/php2shell-check/ci.yml?branch=main&label=CI)](https://github.com/EXT-IT/php2shell-check/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.4.0-green.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.5.0-green.svg)](CHANGELOG.md)
 [![Data](https://img.shields.io/badge/vulnerability%20data-2026--10--21-orange.svg)](#keeping-the-data-current)
 [![Maintained by EXT IT GmbH](https://img.shields.io/badge/maintained%20by-EXT%20IT%20GmbH-0a4f7a.svg)](https://ext-it.tech)
 
@@ -121,9 +121,10 @@ On the server:
 | Check | What it looks at |
 |---|---|
 | `php-binary` | every PHP in `/usr/bin`, `/usr/sbin`, `/usr/local`, Plesk (`/opt/plesk/php`), cPanel EasyApache (`/opt/cpanel/ea-php*`), CloudLinux alt-php, Remi, LiteSpeed, **plus every PHP that is currently running**, taken from the process list, so a build in an unusual path is not missed. Debian and Ubuntu packages are judged by package version against the distribution's fix; everything else by upstream version |
-| `container` | PHP inside every running Docker or Podman container. A Debian or Ubuntu based image is judged by the package database inside the container, for the same reason as the host: the upstream number stays unchanged when the fix is backported |
+| `sapi` | how PHP is served. The advisory demonstrates a complete unauthenticated exploit against **mod_php** and reports none for PHP-FPM, so this decides what to patch first. Detected on the host and inside each container |
+| `container` | PHP inside every running Docker or Podman container, plus stopped containers whose image ships a vulnerable PHP and would bring it back on the next start. A Debian or Ubuntu based image is judged by the package database inside the container, for the same reason as the host: the upstream number stays unchanged when the fix is backported |
 | `mitigation` | the temporary settings from the advisory: `session.upload_progress.enabled`, `expose_php`, `post_max_size` against `memory_limit`, `max_input_nesting_level`, `fatal_error_backtraces`. On Debian layouts it reads the FPM and Apache `php.ini`, on the host and inside containers, not just the CLI one, because they differ |
-| `fpm-pool` | `pm.max_requests` in every PHP-FPM pool |
+| `fpm-pool` | `pm.max_requests` in every PHP-FPM pool, and whether a pool runs as `root`, which would turn this bug into root code execution |
 | `process` | PHP-FPM, `lsphp` or Apache with `mod_php` still running the old binary after an update. A patched package is not a patched server until the service restarts |
 | `mac` | whether AppArmor or SELinux is active |
 | `exposure` | web ports listening on all interfaces; a running Cloudflare Tunnel |
@@ -148,6 +149,9 @@ For each URL:
 
 Read this section even if you skip the rest.
 
+Podman goes through the same code path as Docker, but has only been verified
+against Docker.
+
 A green result covers what the script can see. PHP in a chroot, a
 FreeBSD jail, a VM on the same host or an appliance with a web interface stays
 invisible. The heise article lists pfSense, OPNsense, Synology, QNAP, Citrix,
@@ -163,7 +167,7 @@ script knows the packages that existed on 2026-10-21:
 | Ubuntu 24.04 (php8.3) | `8.3.6-0ubuntu0.24.04.13` |
 | Ubuntu 26.04 (php8.5) | `8.5.4-0ubuntu1.5` |
 | Debian 13 (php8.4) | `8.4.27-1~deb13u1`, [DSA-6574-1](https://security-tracker.debian.org/tracker/CVE-2026-109618) |
-| Debian 12 (php8.2) | none yet, reported as vulnerable |
+| Debian 12 (php8.2) | `8.2.35-1~deb12u1`, [DLA-4848-1](https://security-tracker.debian.org/tracker/CVE-2026-109618) |
 | RHEL, AlmaLinux, Rocky | not in the table, reported as *undecided* |
 
 Run an old copy a week from now and a fixed Debian 12 server can still come

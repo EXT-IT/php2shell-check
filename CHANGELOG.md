@@ -8,6 +8,30 @@ Changes to the vulnerability data (fixed versions, distribution packages) are
 listed separately from code changes, because they change verdicts without
 changing behaviour.
 
+## [1.5.0] - 2026-10-21
+
+Built from a container case matrix on a test host: official Debian-based and
+Alpine images, `wordpress:latest`, Ubuntu and Debian with distribution PHP, a
+stopped container, a container without PHP and one without a shell.
+
+### Added
+
+- `sapi`: how PHP is served, on the host and inside every container. The
+  advisory demonstrates a complete unauthenticated exploit against mod_php
+  and reports none for PHP-FPM, which is what decides the order of patching.
+  mod_php is a warning, FPM an informational line with that caveat.
+- Stopped containers whose image ships a vulnerable PHP are reported as a
+  warning: they come back on the next start. The version is read from the
+  image environment, so this costs no exec.
+- `fpm-pool` flags a pool running as `root`: code execution through this bug
+  would then be root code execution.
+
+### Changed
+
+- Debian 12 (php8.2) is no longer listed as unfixed: the fix shipped as
+  `8.2.35-1~deb12u1` (DLA-4848-1).
+- README states that Podman shares the Docker code path but is unverified.
+
 ## [1.4.0] - 2026-10-21
 
 Found by building a test environment with three containers: a vulnerable
@@ -139,6 +163,7 @@ not dead sites.
   Ubuntu 26.04 `8.5.4-0ubuntu1.5`, Debian 13 `8.4.27-1~deb13u1` (DSA-6574-1).
 - Debian 12 (php8.2): marked vulnerable, no fix published yet.
 
+[1.5.0]: https://github.com/EXT-IT/php2shell-check/releases/tag/v1.5.0
 [1.4.0]: https://github.com/EXT-IT/php2shell-check/releases/tag/v1.4.0
 [1.3.0]: https://github.com/EXT-IT/php2shell-check/releases/tag/v1.3.0
 [1.2.1]: https://github.com/EXT-IT/php2shell-check/releases/tag/v1.2.1

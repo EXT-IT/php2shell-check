@@ -68,7 +68,7 @@ _t_cf() { if _p2s_is_cloudflare_ip "$1"; then _r=yes; else _r=no; fi; if [ "$_r"
 _t_cf 104.16.123.96 yes
 _t_cf 172.67.1.1 yes
 _t_cf 131.0.72.5 yes
-_t_cf 89.163.140.92 no
+_t_cf 203.0.113.42 no
 _t_cf 8.8.8.8 no
 _t_cf 2606:4700:3030::6815:1 yes
 _t_cf 2a06:98c1:3120::3 yes

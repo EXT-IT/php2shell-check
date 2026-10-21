@@ -16,7 +16,7 @@
 set -u
 export LC_ALL=C
 
-P2S_SCRIPT_VERSION='1.4.0'
+P2S_SCRIPT_VERSION='1.5.0'
 P2S_DATA_DATE='2026-10-21'
 P2S_ADVISORY='GHSA-w8hw-w9fx-j79w'
 P2S_ADVISORY_URL='https://github.com/php/php-src/security/advisories/GHSA-w8hw-w9fx-j79w'
@@ -50,7 +50,7 @@ _p2s_distro_fixed() {
         noble:php8.3)    echo '8.3.6-0ubuntu0.24.04.13' ;;  # Ubuntu 24.04
         resolute:php8.5) echo '8.5.4-0ubuntu1.5' ;;         # Ubuntu 26.04
         trixie:php8.4)   echo '8.4.27-1~deb13u1' ;;         # Debian 13, DSA-6574-1
-        bookworm:php8.2) echo unfixed ;;                    # Debian 12
+        bookworm:php8.2) echo '8.2.35-1~deb12u1' ;;         # Debian 12, DLA-4848-1
         *)               echo none ;;
     esac
 }
@@ -474,13 +474,16 @@ _p2s_check_one_binary() {
     _p2s_seen="$_p2s_seen$_real "
     _v=$(_p2s_php_version_of "$_b")
     [ -n "$_v" ] || return 1
+    # No test-root guard here: a path that no package owns simply yields an
+    # empty answer, and that lets the tests put a dpkg-query stub in PATH and
+    # exercise the distribution path end to end instead of as a unit only.
     _pkg=''
-    if [ -z "$_p2s_root" ] && command -v dpkg-query >/dev/null 2>&1; then
+    if command -v dpkg-query >/dev/null 2>&1; then
         _pkg=$(dpkg-query -S "$_real" 2>/dev/null | head -n1 | cut -d: -f1)
     fi
     if [ -n "$_pkg" ]; then
         _verdict=$(_p2s_judge_deb "$_pkg" "$_v")
-    elif [ -z "$_p2s_root" ] && command -v rpm >/dev/null 2>&1 && rpm -qf "$_real" >/dev/null 2>&1; then
+    elif command -v rpm >/dev/null 2>&1 && rpm -qf "$_real" >/dev/null 2>&1; then
         _verdict=$(_p2s_judge_rpm "$_real" "$_v")
     else
         _verdict=$(_p2s_judge_upstream "$_v")
@@ -541,13 +544,20 @@ _p2s_check_binaries() {
 }
 
 _p2s_check_fpm_pools() {
-    local _f _v _any=0
+    local _f _v _u _any=0
     for _f in "$_p2s_root"/etc/php/*/fpm/pool.d/*.conf "$_p2s_root"/etc/php-fpm.d/*.conf \
               "$_p2s_root"/etc/opt/remi/php*/php-fpm.d/*.conf "$_p2s_root"/opt/plesk/php/*/etc/php-fpm.d/*.conf \
               "$_p2s_root"/opt/cpanel/ea-php*/root/etc/php-fpm.d/*.conf "$_p2s_root"/usr/local/etc/php-fpm.d/*.conf; do
         [ -r "$_f" ] || continue
         [ "$_any" -eq 0 ] && _p2s_section 'PHP-FPM pools'
         _any=1
+        # A pool running as root turns code execution through this bug into
+        # root code execution. Worth its own line, whatever the PHP version is.
+        _u=$(grep -E '^[[:space:]]*user[[:space:]]*=' "$_f" 2>/dev/null | tail -n1 | cut -d= -f2 | tr -d '[:space:]' | _p2s_clean 40)
+        if [ "$_u" = root ]; then
+            _p2s_add warn fpm-pool "${_f#"$_p2s_root"}" 'this pool runs as root, so code execution through this bug would be root code execution' \
+                'Run the pool as its own unprivileged user, never as root'
+        fi
         _v=$(grep -E '^[[:space:]]*pm\.max_requests[[:space:]]*=' "$_f" 2>/dev/null | tail -n1 | cut -d= -f2 | tr -dc '0-9')
         if [ -z "$_v" ] || [ "$_v" = 0 ]; then
             _p2s_add info fpm-pool "${_f#"$_p2s_root"}" 'pm.max_requests is unlimited, workers keep corrupted state for their whole life' \
@@ -556,6 +566,45 @@ _p2s_check_fpm_pools() {
             _p2s_add ok fpm-pool "${_f#"$_p2s_root"}" "pm.max_requests = $_v"
         fi
     done
+}
+
+# Which SAPI serves requests. The advisory is explicit: mod_php is where a
+# complete unauthenticated exploit was demonstrated, for PHP-FPM none was,
+# and FrankenPHP and LSAPI are suspected but unvalidated. That is the whole
+# difference between "patch tonight" and "patch in the window".
+_p2s_sapi_note() {   # $1 = sapi, $2 = where
+    case "$1" in
+        mod_php)    _p2s_add warn sapi "$2" 'served by mod_php: the advisory demonstrates a complete unauthenticated exploit against exactly this setup' \
+                        'Treat a vulnerable PHP behind mod_php as the most urgent case' ;;
+        fpm)        _p2s_add info sapi "$2" 'served by PHP-FPM: the advisory reports no complete exploit for FPM, the worker exits on the failed startup. Patch anyway, this is not a fix' ;;
+        litespeed)  _p2s_add info sapi "$2" 'served by LiteSpeed/LSAPI: named as affected in the advisory, not validated there' ;;
+        frankenphp) _p2s_add unknown sapi "$2" 'FrankenPHP: the advisory calls it probably affected from source review, without validation' ;;
+    esac
+}
+
+_p2s_check_sapi() {
+    local _f _found=''
+    for _f in "$_p2s_root"/etc/apache2/mods-enabled/php*.load \
+              "$_p2s_root"/etc/httpd/conf.modules.d/*php*.conf \
+              "$_p2s_root"/usr/local/lib/apache2/modules/libphp*.so \
+              "$_p2s_root"/usr/lib/apache2/modules/libphp*.so; do
+        [ -e "$_f" ] || continue
+        _found=mod_php; break
+    done
+    if [ -z "$_found" ]; then
+        for _f in "$_p2s_root"/etc/php/*/fpm/php-fpm.conf "$_p2s_root"/etc/php-fpm.conf \
+                  "$_p2s_root"/usr/local/etc/php-fpm.conf; do
+            [ -e "$_f" ] || continue
+            _found=fpm; break
+        done
+    fi
+    [ -z "$_found" ] && [ -e "$_p2s_root/usr/local/lsws" ] && _found=litespeed
+    if [ -z "$_found" ] && [ -z "$_p2s_root" ] && command -v frankenphp >/dev/null 2>&1; then
+        _found=frankenphp
+    fi
+    [ -n "$_found" ] || return 0
+    _p2s_section 'How PHP is served'
+    _p2s_sapi_note "$_found" 'host'
 }
 
 _p2s_check_containers() {
@@ -619,11 +668,39 @@ _p2s_check_containers() {
                         'Temporary mitigation: set a low pm.max_requests (for example 500) and reload PHP-FPM'
                 fi
             fi
+            # Each path on its own: "ls a b" fails as soon as one of them is
+            # missing, which hid mod_php in every official apache image.
+            # shellcheck disable=SC2016  # runs inside the container, not here
+            _csapi=$(_p2s_timeout 8 "$_rt" exec "$_c" sh -c 'for f in /etc/apache2/mods-enabled/php*.load /usr/local/lib/apache2/modules/libphp*.so /usr/lib/apache2/modules/libphp*.so /etc/httpd/conf.modules.d/*php*.conf; do
+    if [ -e "$f" ]; then echo mod_php; exit 0; fi
+done
+if command -v php-fpm >/dev/null 2>&1 || command -v php-fpm8 >/dev/null 2>&1; then echo fpm; fi' 2>/dev/null | head -n1 | _p2s_clean 20)
+            [ -n "$_csapi" ] && _p2s_sapi_note "$_csapi" "$_c"
             if [ "$_opt_logs" -eq 1 ]; then
                 _p2s_count_log_hits "$_c (container log, 24 h)" "$_rt" logs --since 24h "$_c"
             fi
         done
         [ "$_found_ct" -eq 1 ] || _p2s_add info container "$_rt" 'no running container with PHP'
+
+        # Stopped containers run no code right now, but they come back with
+        # whatever their image ships. The image environment of the official
+        # PHP images carries the version, so this costs no exec at all.
+        for _c in $(_p2s_timeout 10 "$_rt" ps -a --filter status=exited --filter status=created \
+                        --filter status=paused --format '{{.Names}}' 2>/dev/null); do
+            _c=$(printf '%s' "$_c" | _p2s_clean 80)
+            _img=$("$_rt" inspect -f '{{.Config.Image}}' "$_c" 2>/dev/null | _p2s_clean 120)
+            _v=$(_p2s_timeout 8 "$_rt" image inspect "$_img" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
+                 | awk -F= '$1=="PHP_VERSION"{print $2;exit}' | _p2s_clean 30)
+            _v=${_v%%[-+~]*}
+            _p2s_is_version "$_v" || continue
+            _verdict=$(_p2s_judge_upstream "$_v")
+            case "${_verdict%%|*}" in
+                ok) _p2s_add ok container "$_c (stopped, $_img)" "image ships PHP $_v" ;;
+                *)  _p2s_add warn container "$_c (stopped, $_img)" \
+                        "stopped, but its image ships PHP $_v: it comes back vulnerable on the next start" \
+                        'Pull the new image and recreate the container before starting it again' ;;
+            esac
+        done
     done
 }
 
@@ -1045,6 +1122,7 @@ if [ "$_opt_remote_only" -eq 0 ]; then
         fi
         _p2s_local_ran=1
         _p2s_check_binaries
+        _p2s_check_sapi
         _p2s_check_fpm_pools
         [ "$_opt_containers" -eq 1 ] && [ -z "$_p2s_root" ] && _p2s_check_containers
         if [ -z "$_p2s_root" ]; then
