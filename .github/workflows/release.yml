@@ -1,0 +1,46 @@
+name: Release
+
+# Publishes a GitHub release for the newest v* tag, with the script and
+# SHA256SUMS attached, so that
+#   https://github.com/EXT-IT/php2shell-check/releases/latest/download/<file>
+# always serves the current version. Runs on tag pushes and on pushes to main,
+# and does nothing when the release already exists.
+
+"on":
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Release for the newest tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+        with:
+          fetch-depth: 0
+
+      - name: Create the release if it is missing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(git tag --list 'v*' --sort=-v:refname | head -n1)
+          if [ -z "$tag" ]; then echo "no tag yet"; exit 0; fi
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "release $tag exists"; exit 0
+          fi
+          git checkout -q "$tag"
+          sha256sum -c SHA256SUMS
+          ver=${tag#v}
+          awk -v h="## [$ver]" 'index($0, h) == 1 {f = 1; next} /^## \[/ {if (f) exit} f' CHANGELOG.md > notes.md
+          gh release create "$tag" php2shell-check.sh SHA256SUMS \
+            --title "php2shell-check $ver" --notes-file notes.md --verify-tag

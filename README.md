@@ -56,7 +56,7 @@ Summary  1 vulnerable, 0 undecided, 2 warnings, 2 ok
 On your server:
 
 ```sh
-sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/EXT-IT/php2shell-check/main/php2shell-check.sh)" - https://your-site.example
+sudo bash -c "$(curl -fsSL https://github.com/EXT-IT/php2shell-check/releases/latest/download/php2shell-check.sh)" - https://your-site.example
 ```
 
 Replace `https://your-site.example` with your website. Several sites go one
@@ -66,18 +66,19 @@ server.
 Only a website, from any computer including a Mac (no `sudo` needed):
 
 ```sh
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/EXT-IT/php2shell-check/main/php2shell-check.sh)" - --remote-only https://your-site.example
+bash -c "$(curl -fsSL https://github.com/EXT-IT/php2shell-check/releases/latest/download/php2shell-check.sh)" - --remote-only https://your-site.example
 ```
 
 The command downloads the script completely before it runs and leaves no
-file behind.
+file behind. The link always points to the latest release, so it never
+changes.
 
 Want to read the script first, or check it against its SHA-256 sum? Download
-a release and run it step by step:
+the latest release and run it step by step:
 
 ```sh
-curl -fsSLO https://raw.githubusercontent.com/EXT-IT/php2shell-check/v1.2.1/php2shell-check.sh
-curl -fsSLO https://raw.githubusercontent.com/EXT-IT/php2shell-check/v1.2.1/SHA256SUMS
+curl -fsSLO https://github.com/EXT-IT/php2shell-check/releases/latest/download/php2shell-check.sh
+curl -fsSLO https://github.com/EXT-IT/php2shell-check/releases/latest/download/SHA256SUMS
 sha256sum -c SHA256SUMS          # macOS: shasum -a 256 -c SHA256SUMS
 less php2shell-check.sh
 sudo bash php2shell-check.sh https://your-site.example
