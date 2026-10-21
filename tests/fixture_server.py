@@ -17,17 +17,35 @@ ROUTES = {
     "/litespeed": [("Server", "LiteSpeed")],
     "/escape": [("X-Powered-By", "PHP/8.3.35\x1b]0;pwned\x07")],
     "/plain": [],
+    "/redirect-same": [("Location", "/vulnerable")],
+    "/redirect-access": [("Location", "https://team.cloudflareaccess.com/cdn-cgi/access/login/x")],
 }
+
+# Requests that must never arrive: the redirect target on a foreign host.
+FOREIGN_HITS = [0]
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802 (http.server naming)
+        port = self.server.server_address[1]
+        if self.path == "/redirect-foreign":
+            self._answer(302, [("Location", "http://localhost:%d/foreign-hit" % port)])
+            return
+        if self.path == "/foreign-hit":
+            FOREIGN_HITS[0] += 1
+        if self.path == "/foreign-count":
+            self._answer(200, [("X-Count", str(FOREIGN_HITS[0]))])
+            return
         headers = ROUTES.get(self.path)
         if headers is None:
             self.send_response(404)
             self.end_headers()
             return
-        self.send_response(200)
+        status = 302 if any(n == "Location" for n, _ in headers) else 200
+        self._answer(status, headers)
+
+    def _answer(self, status, headers):
+        self.send_response(status)
         for name, value in headers:
             self.send_header(name, value)
         self.send_header("Content-Length", "2")

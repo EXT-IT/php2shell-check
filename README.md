@@ -6,7 +6,7 @@
 
 [![CI](https://img.shields.io/github/actions/workflow/status/EXT-IT/php2shell-check/ci.yml?branch=main&label=CI)](https://github.com/EXT-IT/php2shell-check/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.0.0-green.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.1.0-green.svg)](CHANGELOG.md)
 [![Data](https://img.shields.io/badge/vulnerability%20data-2026--10--21-orange.svg)](#keeping-the-data-current)
 [![Maintained by EXT IT GmbH](https://img.shields.io/badge/maintained%20by-EXT%20IT%20GmbH-0a4f7a.svg)](https://ext-it.tech)
 
@@ -22,8 +22,9 @@ never sees.
 `php2shell-check.sh` looks in both places, plus Plesk, cPanel, CloudLinux and
 hand-built PHP, and gives one verdict per PHP runtime. It is read-only: it
 reads package databases, asks each PHP binary for its version and settings,
-and sends one ordinary GET request to each URL you give it. No exploit
-traffic, nothing written to disk.
+and sends one ordinary GET request to each URL you give it, following
+redirects only on that same host. No exploit traffic, nothing written to
+disk.
 
 ```console
 $ sudo ./php2shell-check.sh https://www.example.com
@@ -57,8 +58,8 @@ then run it. Please don't pipe it into `sudo bash`; you are about to give a
 stranger's script root, so look at it first. It is one file of plain bash.
 
 ```sh
-curl -fsSLO https://raw.githubusercontent.com/EXT-IT/php2shell-check/v1.0.0/php2shell-check.sh
-curl -fsSLO https://raw.githubusercontent.com/EXT-IT/php2shell-check/v1.0.0/SHA256SUMS
+curl -fsSLO https://raw.githubusercontent.com/EXT-IT/php2shell-check/v1.1.0/php2shell-check.sh
+curl -fsSLO https://raw.githubusercontent.com/EXT-IT/php2shell-check/v1.1.0/SHA256SUMS
 sha256sum -c SHA256SUMS          # macOS: shasum -a 256 -c SHA256SUMS
 less php2shell-check.sh
 sudo bash php2shell-check.sh https://www.example.com
@@ -75,7 +76,7 @@ For websites only, from any machine, including a Mac:
 
 | Option | Effect |
 |---|---|
-| `-r`, `--remote-only` | only check the URLs; no root needed, works on macOS |
+| `-r`, `--remote-only` | only check the URLs; no root needed, works on macOS. At most 10 URLs per run, no address ranges |
 | `--origin IP` | also try to reach each site directly at `IP`, past the proxy |
 | `--no-containers` | skip Docker and Podman |
 | `--no-logs` | skip the log scan |
@@ -108,6 +109,8 @@ For each URL:
 | `php-banner` | a PHP version in `X-Powered-By`, judged like a local version. A distribution's frozen number such as `8.3.6` comes back as *undecided*, for the reason in the first paragraph |
 | `disclosure` | whether the site announces its PHP version at all |
 | `waf` | Cloudflare (by `cf-ray` header and by checking every DNS record against Cloudflare's published IP ranges), Sucuri, Imperva, CloudFront, Azure Front Door, Akamai, Fastly, BunnyCDN. A record that points past Cloudflare is flagged, because that traffic skips the WAF |
+| `access` | a redirect to a Cloudflare Access login, which stops requests without a login before they reach PHP |
+| `redirect` | a redirect to another host. It is reported and not followed, so the script only ever talks to the host you named (or its `www.` variant) |
 | `origin` | with `--origin`, whether the server answers directly. If it does, anyone who finds the IP can go around the WAF |
 
 ## What it cannot tell you

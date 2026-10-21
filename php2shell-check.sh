@@ -8,14 +8,15 @@
 #
 # The script never changes anything and sends no exploit traffic. Local
 # checks read package databases, PHP's own configuration and /proc; remote
-# checks send one ordinary GET request per URL and resolve its DNS name.
+# checks send one ordinary GET request per URL (following redirects only on
+# the same host) and resolve its DNS name.
 #
 # Compatible with bash 3.2 (macOS) for --remote-only; local checks need Linux.
 
 set -u
 export LC_ALL=C
 
-P2S_SCRIPT_VERSION='1.0.0'
+P2S_SCRIPT_VERSION='1.1.0'
 P2S_DATA_DATE='2026-10-21'
 P2S_ADVISORY='GHSA-w8hw-w9fx-j79w'
 P2S_ADVISORY_URL='https://github.com/php/php-src/security/advisories/GHSA-w8hw-w9fx-j79w'
@@ -80,6 +81,8 @@ Add URLs to also check what the sites reveal and whether a WAF sits in front.
 
 Options:
   -r, --remote-only    only check the given URLs (works without root, on macOS)
+                       at most 10 URLs; redirects are followed only within the
+                       host you named (and its www. variant)
       --origin IP      also test whether the sites answer directly on IP,
                        bypassing Cloudflare or another proxy
       --no-containers  skip Docker/Podman containers
@@ -132,6 +135,18 @@ while [ "$#" -gt 0 ]; do
     shift
 done
 
+# This is a tool for checking your own sites, not a scanner: a handful of
+# URLs per run, no address ranges.
+if [ "${#_p2s_urls[@]}" -gt 10 ]; then
+    echo "php2shell-check: at most 10 URLs per run (this checks your own sites, it is not a scanner)" >&2
+    exit 3
+fi
+for _u in ${_p2s_urls[@]+"${_p2s_urls[@]}"}; do
+    if [[ "$_u" =~ ^[0-9a-fA-F.:]+/[0-9]+$ ]]; then
+        echo "php2shell-check: '$_u' looks like an address range; give the URLs of sites you operate" >&2
+        exit 3
+    fi
+done
 if [ "$_opt_remote_only" -eq 1 ] && [ "${#_p2s_urls[@]}" -eq 0 ]; then
     echo "php2shell-check: --remote-only needs at least one URL" >&2
     exit 3
@@ -618,12 +633,53 @@ _p2s_resolve() {   # host -> one IP per line
     } 2>/dev/null | grep -E '^[0-9a-fA-F.:]+$' | sort -u | head -n 8
 }
 
+# Characters allowed in a URL we pass on to curl (never to a shell).
+_p2s_clean_url() { tr -dc 'A-Za-z0-9._~:/?#@!$&()*+,;=%[]-' | head -c "${1:-500}"; }
+
+_p2s_host_of() {   # URL -> lower-case host without port or brackets
+    local _h=${1#*://}
+    _h=${_h%%/*}; _h=${_h%%\?*}; _h=${_h%%#*}; _h=${_h##*@}
+    case "$_h" in \[*) _h=${_h#[}; _h=${_h%%]*} ;; *) _h=${_h%%:*} ;; esac
+    printf '%s' "$_h" | _p2s_lower
+}
+
+_p2s_same_site() {   # host A, host B: equal or one is the www. variant of the other
+    [ "$1" = "$2" ] || [ "www.$1" = "$2" ] || [ "$1" = "www.$2" ]
+}
+
+# GET the URL, following redirects only while they stay on the named host.
+# Sets _p2s_f_hdr (headers of all hops), _p2s_f_foreign (host of a redirect
+# that was not followed) and _p2s_f_access (1 if it pointed to Cloudflare Access).
+_p2s_fetch() {
+    local _cur=$1 _host=$2 _ua=$3 _hop=0 _out _next _nh
+    _p2s_f_hdr=''; _p2s_f_foreign=''; _p2s_f_access=0
+    while [ "$_hop" -le 5 ]; do
+        _hop=$(( _hop + 1 ))
+        _out=$(curl -sS -o /dev/null -D - -w '\n__p2s_next__ %{redirect_url}\n' \
+                    --max-time 15 -A "$_ua" "$_cur" 2>/dev/null | tr -d '\r')
+        printf '%s\n' "$_out" | grep -qE '^HTTP/' || break
+        _p2s_f_hdr="$_p2s_f_hdr
+$(printf '%s\n' "$_out" | grep -v '^__p2s_next__' | _p2s_lower | _p2s_clean_lines)"
+        _next=$(printf '%s\n' "$_out" | grep '^__p2s_next__' | tail -n1 | cut -d' ' -f2- | _p2s_clean_url)
+        [ -n "$_next" ] || break
+        _nh=$(_p2s_host_of "$_next")
+        case "$_nh" in
+            *.cloudflareaccess.com) _p2s_f_access=1; break ;;
+        esac
+        if _p2s_same_site "$_host" "$_nh"; then
+            _cur=$_next
+        else
+            _p2s_f_foreign=$(printf '%s' "$_nh" | _p2s_clean 120)
+            break
+        fi
+    done
+}
+
 _p2s_check_url() {
     local _url=$1 _host _hdr _code _phpv _verdict _edge='' _ips _ip _cf_ip=0 _non_cf=0 _srv _ua _o
     case "$_url" in http://*|https://*) ;; *) _url="https://$_url" ;; esac
-    _url=$(printf '%s' "$_url" | _p2s_clean 300)
-    _host=${_url#*://}; _host=${_host%%/*}; _host=${_host##*@}
-    case "$_host" in \[*) _host=${_host#[}; _host=${_host%%]*} ;; *) _host=${_host%%:*} ;; esac
+    _url=$(printf '%s' "$_url" | _p2s_clean_url 300)
+    _host=$(_p2s_host_of "$_url")
     _p2s_section "Website $_url"
     _ua="php2shell-check/$P2S_SCRIPT_VERSION (+$P2S_REPO_URL)"
 
@@ -631,13 +687,21 @@ _p2s_check_url() {
         _p2s_add unknown remote "$_url" 'curl is not installed, remote checks skipped'
         return
     fi
-    _hdr=$(curl -sS -o /dev/null -D - -L --max-redirs 5 --max-time 15 -A "$_ua" "$_url" 2>/dev/null | tr -d '\r' | _p2s_lower | _p2s_clean_lines)
+    _p2s_fetch "$_url" "$_host" "$_ua"
+    _hdr=$_p2s_f_hdr
     _code=$(printf '%s\n' "$_hdr" | grep -E '^http/' | tail -n1 | awk '{print $2}')
-    if [ -z "$_hdr" ]; then
+    if [ -z "$_code" ]; then
         _p2s_add unknown remote "$_url" 'no HTTP response (DNS, TLS or connection failure)'
         return
     fi
-    _p2s_add info remote "$_url" "reachable, final HTTP status ${_code:-?}"
+    _p2s_add info remote "$_url" "reachable, last HTTP status ${_code:-?}"
+    if [ "$_p2s_f_access" -eq 1 ]; then
+        _p2s_add ok access "$_url" 'redirects to a Cloudflare Access login: requests without a login stop at Cloudflare, before PHP'
+    fi
+    if [ -n "$_p2s_f_foreign" ]; then
+        _p2s_add info redirect "$_url" "redirects to $_p2s_f_foreign; not followed, only the host you named is checked" \
+            'Run the check again with the target URL if that site is yours'
+    fi
 
     # PHP version banner (expose_php).
     _phpv=$(printf '%s\n' "$_hdr" | grep -oE 'php/[0-9]+\.[0-9]+\.[0-9]+' | head -n1 | cut -d/ -f2)

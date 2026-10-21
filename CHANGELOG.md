@@ -8,6 +8,22 @@ Changes to the vulnerability data (fixed versions, distribution packages) are
 listed separately from code changes, because they change verdicts without
 changing behaviour.
 
+## [1.1.0] - 2026-10-21
+
+### Changed
+
+- Redirects are followed only while they stay on the host you named or its
+  `www.` variant. A redirect to another host is reported and not followed, so
+  the script never sends a request to a system you did not name.
+- At most 10 URLs per run; arguments that look like address ranges
+  (`203.0.113.0/24`) are refused. The tool checks your own sites and is not a
+  scanner.
+
+### Added
+
+- `access`: a redirect to a Cloudflare Access login is recognised.
+- `redirect`: redirects to other hosts are listed.
+
 ## [1.0.0] - 2026-10-21
 
 ### Added
@@ -35,4 +51,5 @@ changing behaviour.
   Ubuntu 26.04 `8.5.4-0ubuntu1.5`, Debian 13 `8.4.27-1~deb13u1` (DSA-6574-1).
 - Debian 12 (php8.2): marked vulnerable, no fix published yet.
 
+[1.1.0]: https://github.com/EXT-IT/php2shell-check/releases/tag/v1.1.0
 [1.0.0]: https://github.com/EXT-IT/php2shell-check/releases/tag/v1.0.0
