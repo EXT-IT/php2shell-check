@@ -1,0 +1,82 @@
+name: CI
+
+"on":
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint (shellcheck, yamllint, checksums)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - name: Install linters
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends shellcheck yamllint
+
+      - name: ShellCheck
+        run: shellcheck -S style -x php2shell-check.sh tests/run_tests.sh tests/cases/*.sh
+
+      - name: yamllint
+        run: yamllint --strict .
+
+      - name: SHA256SUMS matches the script
+        run: sha256sum -c SHA256SUMS
+
+  test-linux:
+    name: Tests (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: ubuntu:24.04
+            setup: apt-get update -qq && apt-get install -y -qq bash curl python3 >/dev/null
+          - image: ubuntu:22.04
+            setup: apt-get update -qq && apt-get install -y -qq bash curl python3 >/dev/null
+          - image: debian:12
+            setup: apt-get update -qq && apt-get install -y -qq bash curl python3 >/dev/null
+          - image: debian:13
+            setup: apt-get update -qq && apt-get install -y -qq bash curl python3 >/dev/null
+          - image: rockylinux:9
+            setup: dnf install -y -q python3 >/dev/null
+          - image: alpine:3.20
+            setup: apk add --no-cache -q bash curl python3 coreutils
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      # docker run instead of a job container: JavaScript actions do not run
+      # inside Alpine, and one pattern for every image keeps the matrix honest.
+      - name: Run tests
+        env:
+          SETUP: ${{ matrix.setup }}
+          IMAGE: ${{ matrix.image }}
+        run: docker run --rm -e SETUP -v "$PWD:/src" -w /src "$IMAGE" sh -c "$SETUP && bash tests/run_tests.sh"
+
+  test-macos:
+    name: Tests (macOS, bash 3.2)
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - name: Run tests with the system bash
+        run: /bin/bash tests/run_tests.sh
