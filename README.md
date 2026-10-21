@@ -1,0 +1,193 @@
+<div align="center">
+
+# php2shell-check
+
+**Is this server still exposed to php2shell (CVE-2026-109618, CVE-2026-109619)?**
+
+[![CI](https://img.shields.io/github/actions/workflow/status/EXT-IT/php2shell-check/ci.yml?branch=main&label=CI)](https://github.com/EXT-IT/php2shell-check/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Version](https://img.shields.io/badge/version-1.0.0-green.svg)](CHANGELOG.md)
+[![Data](https://img.shields.io/badge/vulnerability%20data-2026--10--21-orange.svg)](#keeping-the-data-current)
+[![Maintained by EXT IT GmbH](https://img.shields.io/badge/maintained%20by-EXT%20IT%20GmbH-0a4f7a.svg)](https://ext-it.tech)
+
+</div>
+
+On Ubuntu 24.04, `php -v` prints `PHP 8.3.6` before the fix and after it.
+Canonical backports security patches and keeps the version number, so the
+number that every quick check looks at tells you nothing. The patched package
+is `8.3.6-0ubuntu0.24.04.13`, and only the package database knows whether you
+have it. Your WordPress container, meanwhile, ships its own PHP that `apt`
+never sees.
+
+`php2shell-check.sh` looks in both places, plus Plesk, cPanel, CloudLinux and
+hand-built PHP, and gives one verdict per PHP runtime. It is read-only: it
+reads package databases, asks each PHP binary for its version and settings,
+and sends one ordinary GET request to each URL you give it. No exploit
+traffic, nothing written to disk.
+
+```console
+$ sudo ./php2shell-check.sh https://www.example.com
+
+PHP installations on this host
+  [ OK ] php-binary     /usr/sbin/php-fpm8.3
+         package php8.3-fpm 8.3.6-0ubuntu0.24.04.13 (distribution fix from 8.3.6-0ubuntu0.24.04.13)
+
+PHP in docker containers
+  [VULN] container      shop-wordpress-1 (wordpress:latest)
+         PHP 8.3.35, fixed in 8.3.36
+         -> Update PHP to 8.3.36 or later (container: pull the new image and recreate)
+  [WARN] mitigation     shop-wordpress-1
+         temporary mitigations not set: session.upload_progress.enabled=0 expose_php=0.
+
+Website https://www.example.com
+  [WARN] disclosure     https://www.example.com
+         the PHP version is visible to everyone (X-Powered-By: PHP/8.3.35)
+  [ OK ] waf            https://www.example.com
+         proxied through Cloudflare (header and DNS); Cloudflare says it has deployed
+         WAF rules for these CVEs on all plans, Free included
+
+Summary  1 vulnerable, 0 undecided, 2 warnings, 2 ok
+  VULNERABLE  at least one PHP runtime needs an update now.
+```
+
+## Run it
+
+Download a tagged release, check it against the published checksum, read it,
+then run it. Please don't pipe it into `sudo bash`; you are about to give a
+stranger's script root, so look at it first. It is one file of plain bash.
+
+```sh
+curl -fsSLO https://raw.githubusercontent.com/EXT-IT/php2shell-check/v1.0.0/php2shell-check.sh
+curl -fsSLO https://raw.githubusercontent.com/EXT-IT/php2shell-check/v1.0.0/SHA256SUMS
+sha256sum -c SHA256SUMS          # macOS: shasum -a 256 -c SHA256SUMS
+less php2shell-check.sh
+sudo bash php2shell-check.sh https://www.example.com
+```
+
+Without root it still runs, but it cannot see containers or other users'
+processes and says so in the output.
+
+For websites only, from any machine, including a Mac:
+
+```sh
+./php2shell-check.sh --remote-only https://www.example.com https://shop.example.com
+```
+
+| Option | Effect |
+|---|---|
+| `-r`, `--remote-only` | only check the URLs; no root needed, works on macOS |
+| `--origin IP` | also try to reach each site directly at `IP`, past the proxy |
+| `--no-containers` | skip Docker and Podman |
+| `--no-logs` | skip the log scan |
+| `--json` | one JSON object on stdout, for monitoring and fleet runs |
+| `--no-color`, `-q` | plain output; summary only |
+
+Exit codes: `0` nothing vulnerable found, `1` vulnerable, `2` could not decide,
+`3` usage error. Warnings (missing mitigations, version disclosure) do not
+change the exit code.
+
+## What it checks
+
+On the server:
+
+| Check | What it looks at |
+|---|---|
+| `php-binary` | every PHP in `/usr/bin`, `/usr/sbin`, `/usr/local`, Plesk (`/opt/plesk/php`), cPanel EasyApache (`/opt/cpanel/ea-php*`), CloudLinux alt-php, Remi, LiteSpeed. Debian and Ubuntu packages are judged by package version against the distribution's fix; everything else by upstream version |
+| `container` | PHP inside every running Docker or Podman container |
+| `mitigation` | the temporary settings from the advisory: `session.upload_progress.enabled`, `expose_php`, `post_max_size` against `memory_limit`, `max_input_nesting_level`, `fatal_error_backtraces`. On Debian layouts it reads the FPM and Apache `php.ini`, not just the CLI one, because they differ |
+| `fpm-pool` | `pm.max_requests` in every PHP-FPM pool |
+| `process` | PHP-FPM, `lsphp` or Apache with `mod_php` still running the old binary after an update. A patched package is not a patched server until the service restarts |
+| `mac` | whether AppArmor or SELinux is active |
+| `exposure` | web ports listening on all interfaces; a running Cloudflare Tunnel |
+| `log-indicator` | memory-limit fatal errors in current web server, PHP-FPM and container logs. The first CVE triggers at exactly that point. A count is a hint, never proof |
+
+For each URL:
+
+| Check | What it looks at |
+|---|---|
+| `php-banner` | a PHP version in `X-Powered-By`, judged like a local version. A distribution's frozen number such as `8.3.6` comes back as *undecided*, for the reason in the first paragraph |
+| `disclosure` | whether the site announces its PHP version at all |
+| `waf` | Cloudflare (by `cf-ray` header and by checking every DNS record against Cloudflare's published IP ranges), Sucuri, Imperva, CloudFront, Azure Front Door, Akamai, Fastly, BunnyCDN. A record that points past Cloudflare is flagged, because that traffic skips the WAF |
+| `origin` | with `--origin`, whether the server answers directly. If it does, anyone who finds the IP can go around the WAF |
+
+## What it cannot tell you
+
+Read this section even if you skip the rest.
+
+A green result covers what the script can see. PHP in a chroot, a
+FreeBSD jail, a VM on the same host or an appliance with a web interface stays
+invisible. The heise article lists pfSense, OPNsense, Synology, QNAP, Citrix,
+Ivanti and F5 BIG-IP among the products that embed PHP, and none of them can
+run this script. Check them with their vendors.
+
+The fix table goes stale. Distributions publish fixes over days. The
+script knows the packages that existed on 2026-10-21:
+
+| Release | Fixed package |
+|---|---|
+| Ubuntu 22.04 (php8.1) | `8.1.2-1ubuntu2.28` |
+| Ubuntu 24.04 (php8.3) | `8.3.6-0ubuntu0.24.04.13` |
+| Ubuntu 26.04 (php8.5) | `8.5.4-0ubuntu1.5` |
+| Debian 13 (php8.4) | `8.4.27-1~deb13u1`, [DSA-6574-1](https://security-tracker.debian.org/tracker/CVE-2026-109618) |
+| Debian 12 (php8.2) | none yet, reported as vulnerable |
+| RHEL, AlmaLinux, Rocky | not in the table, reported as *undecided* |
+
+Run an old copy a week from now and a fixed Debian 12 server can still come
+out *vulnerable*. Use the latest release.
+
+Upstream branches 7.4, 8.0 and 8.1 have no fix. The PHP team announced
+backports but had not released them when this version shipped. Until they
+appear, those versions always come out vulnerable, even if a vendor has
+patched them privately.
+
+The WAF check sees that a proxy is there, not what it blocks. Cloudflare
+said on 2026-10-21 that its managed rules cover the known attack paths on
+every plan, and its CTO called them a stopgap. The script cannot see whether
+those rules are switched on for your zone. Nor can it see whether your origin
+is reachable unless you pass `--origin`.
+
+Remote banners are hints. Hiding `X-Powered-By` makes the remote check
+quiet. It does not patch anything.
+
+## Keeping the data current
+
+Everything that decides a verdict sits in three short functions at the top of
+the script: `_p2s_upstream_fixed`, `_p2s_distro_fixed` and the list of frozen
+versions. When a distribution publishes a fix, that is a two-line change plus a
+test in `tests/run_tests.sh`. If you keep your own copy current, link the
+distribution's advisory next to each entry.
+
+```sh
+bash tests/run_tests.sh      # no root, no network, no Docker needed
+```
+
+CI runs the tests on Ubuntu 22.04 and 24.04, Debian 12 and 13, Rocky Linux 9,
+Alpine and macOS (bash 3.2), and checks `SHA256SUMS` against the script.
+
+## Background
+
+- PHP advisory: [GHSA-w8hw-w9fx-j79w](https://github.com/php/php-src/security/advisories/GHSA-w8hw-w9fx-j79w)
+- heise online, 21.10.2026: [php2shell: Kritische Sicherheitslücken erlauben Codeeinschleusung in PHP](https://www.heise.de/news/php2shell-Kritische-Sicherheitsluecken-erlauben-Codeeinschleusung-in-PHP-11492938.html)
+- Cloudflare IP ranges: <https://www.cloudflare.com/ips/>
+
+## Disclaimer
+
+This script is for administrators checking systems they own or are
+authorised to check. Use it on anything else and that is your decision and
+your responsibility, not ours.
+
+It is provided as is, free of charge, without warranty and without support.
+A result of "not vulnerable" is no guarantee: if in doubt, patch. EXT IT GmbH
+does not answer questions about the script or its results, does not help with
+installing or running it, and has no obligation to fix errors or keep the
+vulnerability data current. Issues and pull requests may stay unanswered.
+
+To the extent permitted by law, EXT IT GmbH is not liable for any damage
+resulting from using this script or relying on its output. This does not limit
+liability where the law does not allow it to be limited, in particular for
+intent and gross negligence.
+
+## License
+
+MIT, see [LICENSE](LICENSE). Copyright 2026 EXT IT GmbH, Hannover.
+[ext-it.tech](https://ext-it.tech) · [Impressum](https://ext-it.tech/impressum/)
