@@ -53,9 +53,23 @@ Summary  1 vulnerable, 0 undecided, 2 warnings, 2 ok
 
 ## Run it
 
-Download a tagged release, check it against the published checksum, read it,
-then run it. Please don't pipe it into `sudo bash`; you are about to give a
-stranger's script root, so look at it first. It is one file of plain bash.
+One line: download the release, check it against the checksum printed here,
+and run it only if the checksum matches.
+
+```sh
+curl -fsSLO https://raw.githubusercontent.com/EXT-IT/php2shell-check/v1.1.0/php2shell-check.sh && echo "68f1807e8e2779a556f1ffe50697e186b8d6bbbccc3a0132a27629565103c9c7  php2shell-check.sh" | sha256sum -c - && sudo bash php2shell-check.sh
+```
+
+Append your URLs to the last command to check the sites as well
+(`sudo bash php2shell-check.sh https://www.example.com`). On a Mac, for
+websites only:
+
+```sh
+curl -fsSLO https://raw.githubusercontent.com/EXT-IT/php2shell-check/v1.1.0/php2shell-check.sh && echo "68f1807e8e2779a556f1ffe50697e186b8d6bbbccc3a0132a27629565103c9c7  php2shell-check.sh" | shasum -a 256 -c - && bash php2shell-check.sh --remote-only https://www.example.com
+```
+
+If you would rather read the script before giving it root, and you should,
+go step by step. It is one file of plain bash.
 
 ```sh
 curl -fsSLO https://raw.githubusercontent.com/EXT-IT/php2shell-check/v1.1.0/php2shell-check.sh
