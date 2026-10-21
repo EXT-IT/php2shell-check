@@ -33,6 +33,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         if self.path == "/foreign-hit":
             FOREIGN_HITS[0] += 1
+        if self.path == "/cf-blocked":
+            self._answer(403, [("Server", "cloudflare"), ("CF-RAY", "8f00000000000001-FRA"),
+                               ("cf-mitigated", "challenge")])
+            return
         if self.path == "/foreign-count":
             self._answer(200, [("X-Count", str(FOREIGN_HITS[0]))])
             return

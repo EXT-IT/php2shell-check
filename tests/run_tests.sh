@@ -140,7 +140,7 @@ if command -v python3 >/dev/null 2>&1 && command -v curl >/dev/null 2>&1; then
     _t_run 'Sucuri detected'               0 'behind Sucuri'       bash "$_t_script" -r --no-color "$_t_base/sucuri"
     _t_run 'LiteSpeed noted'               0 'LSAPI'               bash "$_t_script" -r --no-color "$_t_base/litespeed"
     _t_run 'no WAF reported'               0 'no WAF or CDN'       bash "$_t_script" -r --no-color "$_t_base/plain"
-    _t_run 'unreachable site is undecided' 2 'no HTTP response'    bash "$_t_script" -r --no-color "http://127.0.0.1:9/"
+    _t_run 'unreachable site is undecided' 2 'no HTTP answer'    bash "$_t_script" -r --no-color "http://127.0.0.1:9/"
     _t_run 'origin reachable warns'        0 'WARN\] origin'       bash "$_t_script" -r --no-color --origin 127.0.0.1 "$_t_base/plain"
     if bash "$_t_script" -r --no-color "$_t_base/escape" | LC_ALL=C grep -q "$(printf '\033')"; then
         _t_bad 'escape sequences from headers are stripped'

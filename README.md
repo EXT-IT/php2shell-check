@@ -6,7 +6,7 @@
 
 [![CI](https://img.shields.io/github/actions/workflow/status/EXT-IT/php2shell-check/ci.yml?branch=main&label=CI)](https://github.com/EXT-IT/php2shell-check/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.1.0-green.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.2.0-green.svg)](CHANGELOG.md)
 [![Data](https://img.shields.io/badge/vulnerability%20data-2026--10--21-orange.svg)](#keeping-the-data-current)
 [![Maintained by EXT IT GmbH](https://img.shields.io/badge/maintained%20by-EXT%20IT%20GmbH-0a4f7a.svg)](https://ext-it.tech)
 
@@ -76,8 +76,8 @@ Want to read the script first, or check it against its SHA-256 sum? Download
 a release and run it step by step:
 
 ```sh
-curl -fsSLO https://raw.githubusercontent.com/EXT-IT/php2shell-check/v1.1.0/php2shell-check.sh
-curl -fsSLO https://raw.githubusercontent.com/EXT-IT/php2shell-check/v1.1.0/SHA256SUMS
+curl -fsSLO https://raw.githubusercontent.com/EXT-IT/php2shell-check/v1.2.0/php2shell-check.sh
+curl -fsSLO https://raw.githubusercontent.com/EXT-IT/php2shell-check/v1.2.0/SHA256SUMS
 sha256sum -c SHA256SUMS          # macOS: shasum -a 256 -c SHA256SUMS
 less php2shell-check.sh
 sudo bash php2shell-check.sh https://your-site.example
@@ -118,6 +118,9 @@ For each URL:
 
 | Check | What it looks at |
 |---|---|
+| `remote` | whether the site answers; if not, why: DNS, connection refused, timeout or TLS |
+| `tls` | HTTPS that does not work (a URL given without `https://` is then checked over plain HTTP) or a certificate that does not match the name. The headers are read either way |
+| `blocked` | Cloudflare answering with a block or challenge page instead of the site. The banner check cannot say anything then, and the script says so instead of reporting a clean result |
 | `php-banner` | a PHP version in `X-Powered-By`, judged like a local version. A distribution's frozen number such as `8.3.6` comes back as *undecided*, for the reason in the first paragraph |
 | `disclosure` | whether the site announces its PHP version at all |
 | `waf` | Cloudflare (by `cf-ray` header and by checking every DNS record against Cloudflare's published IP ranges), Sucuri, Imperva, CloudFront, Azure Front Door, Akamai, Fastly, BunnyCDN. A record that points past Cloudflare is flagged, because that traffic skips the WAF |

@@ -16,7 +16,7 @@
 set -u
 export LC_ALL=C
 
-P2S_SCRIPT_VERSION='1.1.0'
+P2S_SCRIPT_VERSION='1.2.0'
 P2S_DATA_DATE='2026-10-21'
 P2S_ADVISORY='GHSA-w8hw-w9fx-j79w'
 P2S_ADVISORY_URL='https://github.com/php/php-src/security/advisories/GHSA-w8hw-w9fx-j79w'
@@ -647,17 +647,53 @@ _p2s_same_site() {   # host A, host B: equal or one is the www. variant of the o
     [ "$1" = "$2" ] || [ "www.$1" = "$2" ] || [ "$1" = "www.$2" ]
 }
 
+# curl exit code -> short reason for the report.
+_p2s_curl_reason() {
+    case "$1" in
+        6)        echo 'the name does not resolve (DNS)' ;;
+        7)        echo 'connection refused' ;;
+        28)       echo 'connection timed out' ;;
+        35)       echo 'TLS handshake failed (often: no certificate for this name on the server)' ;;
+        51|60)    echo 'TLS certificate is not valid for this name' ;;
+        52)       echo 'the server closed the connection without an answer' ;;
+        56)       echo 'connection reset' ;;
+        *)        echo "connection failed (curl exit $1)" ;;
+    esac
+}
+
 # GET the URL, following redirects only while they stay on the named host.
 # Sets _p2s_f_hdr (headers of all hops), _p2s_f_foreign (host of a redirect
-# that was not followed) and _p2s_f_access (1 if it pointed to Cloudflare Access).
+# that was not followed), _p2s_f_access (1 if it pointed to Cloudflare
+# Access), _p2s_f_err (reason when nothing answered), _p2s_f_badcert (1 when
+# the certificate did not match and the headers were read without
+# verification) and _p2s_f_http (reason when HTTPS failed and plain HTTP was
+# used instead; only for URLs given without a scheme).
 _p2s_fetch() {
-    local _cur=$1 _host=$2 _ua=$3 _hop=0 _out _next _nh
+    local _cur=$1 _host=$2 _ua=$3 _auto=${4:-0} _hop=0 _out _rc _next _nh _k=''
     _p2s_f_hdr=''; _p2s_f_foreign=''; _p2s_f_access=0
-    while [ "$_hop" -le 5 ]; do
+    _p2s_f_err=''; _p2s_f_badcert=0; _p2s_f_http=''
+    while [ "$_hop" -le 7 ]; do
         _hop=$(( _hop + 1 ))
-        _out=$(curl -sS -o /dev/null -D - -w '\n__p2s_next__ %{redirect_url}\n' \
-                    --max-time 15 -A "$_ua" "$_cur" 2>/dev/null | tr -d '\r')
-        printf '%s\n' "$_out" | grep -qE '^HTTP/' || break
+        _out=$(curl -sS -o /dev/null -D - -w '\n__p2s_next__ %{redirect_url}\n' $_k \
+                    --connect-timeout 8 --max-time 15 -A "$_ua" "$_cur" 2>/dev/null)
+        _rc=$?
+        if [ "$_rc" -ne 0 ] && ! printf '%s\n' "$_out" | grep -qE '^HTTP/'; then
+            # A wrong certificate does not stop the check: the headers are
+            # read anyway, and the certificate problem is reported.
+            if { [ "$_rc" -eq 60 ] || [ "$_rc" -eq 51 ]; } && [ -z "$_k" ]; then
+                _k='-k'; _p2s_f_badcert=1; continue
+            fi
+            # Given without a scheme and HTTPS does not work: try plain HTTP
+            # on the same host once.
+            if [ "$_auto" -eq 1 ] && [ -z "$_p2s_f_http" ] && [ -z "$_p2s_f_hdr" ]; then
+                case "$_cur" in
+                    https://*) _p2s_f_http=$(_p2s_curl_reason "$_rc"); _cur="http://${_cur#https://}"; continue ;;
+                esac
+            fi
+            _p2s_f_err=$(_p2s_curl_reason "$_rc")
+            break
+        fi
+        _out=$(printf '%s\n' "$_out" | tr -d '\r')
         _p2s_f_hdr="$_p2s_f_hdr
 $(printf '%s\n' "$_out" | grep -v '^__p2s_next__' | _p2s_lower | _p2s_clean_lines)"
         _next=$(printf '%s\n' "$_out" | grep '^__p2s_next__' | tail -n1 | cut -d' ' -f2- | _p2s_clean_url)
@@ -676,8 +712,8 @@ $(printf '%s\n' "$_out" | grep -v '^__p2s_next__' | _p2s_lower | _p2s_clean_line
 }
 
 _p2s_check_url() {
-    local _url=$1 _host _hdr _code _phpv _verdict _edge='' _ips _ip _cf_ip=0 _non_cf=0 _srv _ua _o
-    case "$_url" in http://*|https://*) ;; *) _url="https://$_url" ;; esac
+    local _url=$1 _host _hdr _code _phpv _verdict _edge='' _ips _ip _cf_ip=0 _non_cf=0 _srv _ua _o _auto=0 _blocked=0
+    case "$_url" in http://*|https://*) ;; *) _url="https://$_url"; _auto=1 ;; esac
     _url=$(printf '%s' "$_url" | _p2s_clean_url 300)
     _host=$(_p2s_host_of "$_url")
     _p2s_section "Website $_url"
@@ -687,14 +723,32 @@ _p2s_check_url() {
         _p2s_add unknown remote "$_url" 'curl is not installed, remote checks skipped'
         return
     fi
-    _p2s_fetch "$_url" "$_host" "$_ua"
+    _p2s_fetch "$_url" "$_host" "$_ua" "$_auto"
     _hdr=$_p2s_f_hdr
     _code=$(printf '%s\n' "$_hdr" | grep -E '^http/' | tail -n1 | awk '{print $2}')
     if [ -z "$_code" ]; then
-        _p2s_add unknown remote "$_url" 'no HTTP response (DNS, TLS or connection failure)'
+        _p2s_add unknown remote "$_url" "no HTTP answer: ${_p2s_f_err:-unknown error}${_p2s_f_http:+ (HTTPS: $_p2s_f_http)}" \
+            'A site that does not answer cannot be judged from outside; run the script on its server'
         return
     fi
     _p2s_add info remote "$_url" "reachable, last HTTP status ${_code:-?}"
+    if [ -n "$_p2s_f_http" ]; then
+        _p2s_add info tls "$_url" "HTTPS did not work ($_p2s_f_http), checked over plain HTTP"
+    fi
+    if [ "$_p2s_f_badcert" -eq 1 ]; then
+        _p2s_add info tls "$_url" 'the TLS certificate is not valid for this name; headers were read without verification'
+    fi
+    # Cloudflare (or another edge) answering with a block or challenge page
+    # means the application's own headers never reached us.
+    case "$_code" in
+        403|429|503)
+            if printf '%s\n' "$_hdr" | grep -qE '^cf-mitigated:|^server: *cloudflare' \
+               && ! printf '%s\n' "$_hdr" | grep -qE '^x-powered-by:'; then
+                _blocked=1
+                _p2s_add info blocked "$_url" "Cloudflare answered with a block or challenge page (HTTP $_code): the site's own headers are not visible, so the PHP banner check says nothing here" \
+                    'For sites behind a challenge, run the script on the server itself'
+            fi ;;
+    esac
     if [ "$_p2s_f_access" -eq 1 ]; then
         _p2s_add ok access "$_url" 'redirects to a Cloudflare Access login: requests without a login stop at Cloudflare, before PHP'
     fi
@@ -717,7 +771,7 @@ _p2s_check_url() {
         _p2s_add warn disclosure "$_url" "the PHP version is visible to everyone (X-Powered-By: PHP/$_phpv)" \
             'Set expose_php=0 so scanners cannot pick vulnerable targets by header'
     else
-        _p2s_add ok disclosure "$_url" 'no PHP version in the response headers (this alone says nothing about the patch level)'
+        [ "$_blocked" -eq 1 ] || _p2s_add ok disclosure "$_url" 'no PHP version in the response headers (this alone says nothing about the patch level)'
     fi
 
     # Edge / WAF detection by headers.
@@ -753,7 +807,7 @@ _p2s_check_url() {
             if [ "$_cf_ip" -eq 1 ]; then
                 _p2s_add unknown waf "$_url" "$_host resolves to Cloudflare, but the response carried no Cloudflare headers"
             else
-                _p2s_add info waf "$_url" "no WAF or CDN detected${_srv:+ (server:$_srv)}: requests reach PHP unfiltered" \
+                _p2s_add info waf "$_url" "no WAF or CDN detected${_srv:+ (server:$_srv)}: requests reach the server unfiltered" \
                     'If you cannot patch today, put the site behind a WAF that has rules for CVE-2026-109618/109619'
             fi ;;
         *)

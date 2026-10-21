@@ -8,6 +8,28 @@ Changes to the vulnerability data (fixed versions, distribution packages) are
 listed separately from code changes, because they change verdicts without
 changing behaviour.
 
+## [1.2.0] - 2026-10-21
+
+From testing against real-world sites (shared hosting, Cloudflare, sites
+without a certificate): most "no answer" results in 1.1.0 were TLS problems,
+not dead sites.
+
+### Added
+
+- `tls`: a URL given without a scheme falls back to plain HTTP on the same
+  host when HTTPS fails (common on shared hosting without a certificate for
+  the name). A certificate that does not match the name no longer stops the
+  check; the headers are read without verification and the problem is
+  reported.
+- `blocked`: a Cloudflare block or challenge page (HTTP 403/429/503) is
+  reported as such and no longer counted as "no PHP version in the headers".
+
+### Changed
+
+- "No HTTP answer" now names the reason: DNS, connection refused, timeout,
+  TLS handshake or certificate.
+- Connect timeout of 8 s per request.
+
 ## [1.1.0] - 2026-10-21
 
 ### Changed
@@ -51,5 +73,6 @@ changing behaviour.
   Ubuntu 26.04 `8.5.4-0ubuntu1.5`, Debian 13 `8.4.27-1~deb13u1` (DSA-6574-1).
 - Debian 12 (php8.2): marked vulnerable, no fix published yet.
 
+[1.2.0]: https://github.com/EXT-IT/php2shell-check/releases/tag/v1.2.0
 [1.1.0]: https://github.com/EXT-IT/php2shell-check/releases/tag/v1.1.0
 [1.0.0]: https://github.com/EXT-IT/php2shell-check/releases/tag/v1.0.0
