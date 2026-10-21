@@ -49,12 +49,6 @@ jobs:
       - name: SHA256SUMS matches the script
         run: sha256sum -c SHA256SUMS
 
-      - name: README one-liner carries the current checksum
-        run: |
-          sum=$(cut -d' ' -f1 SHA256SUMS)
-          grep -q "echo \"$sum  php2shell-check.sh\"" README.md || {
-            echo "README one-liner does not contain $sum"; exit 1; }
-
   test-linux:
     name: Tests (${{ matrix.image }})
     runs-on: ubuntu-latest

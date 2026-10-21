@@ -53,40 +53,38 @@ Summary  1 vulnerable, 0 undecided, 2 warnings, 2 ok
 
 ## Run it
 
-One line: download the release, check it against the checksum printed here,
-and run it only if the checksum matches.
+On your server:
 
 ```sh
-curl -fsSLO https://raw.githubusercontent.com/EXT-IT/php2shell-check/v1.1.0/php2shell-check.sh && echo "68f1807e8e2779a556f1ffe50697e186b8d6bbbccc3a0132a27629565103c9c7  php2shell-check.sh" | sha256sum -c - && sudo bash php2shell-check.sh
+sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/EXT-IT/php2shell-check/main/php2shell-check.sh)" - https://your-site.example
 ```
 
-Append your URLs to the last command to check the sites as well
-(`sudo bash php2shell-check.sh https://www.example.com`). On a Mac, for
-websites only:
+Replace `https://your-site.example` with your website. Several sites go one
+after the other, separated by spaces. Leave the URL out to check only the
+server.
+
+Only a website, from any computer including a Mac (no `sudo` needed):
 
 ```sh
-curl -fsSLO https://raw.githubusercontent.com/EXT-IT/php2shell-check/v1.1.0/php2shell-check.sh && echo "68f1807e8e2779a556f1ffe50697e186b8d6bbbccc3a0132a27629565103c9c7  php2shell-check.sh" | shasum -a 256 -c - && bash php2shell-check.sh --remote-only https://www.example.com
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/EXT-IT/php2shell-check/main/php2shell-check.sh)" - --remote-only https://your-site.example
 ```
 
-If you would rather read the script before giving it root, and you should,
-go step by step. It is one file of plain bash.
+The command downloads the script completely before it runs and leaves no
+file behind.
+
+Want to read the script first, or check it against its SHA-256 sum? Download
+a release and run it step by step:
 
 ```sh
 curl -fsSLO https://raw.githubusercontent.com/EXT-IT/php2shell-check/v1.1.0/php2shell-check.sh
 curl -fsSLO https://raw.githubusercontent.com/EXT-IT/php2shell-check/v1.1.0/SHA256SUMS
 sha256sum -c SHA256SUMS          # macOS: shasum -a 256 -c SHA256SUMS
 less php2shell-check.sh
-sudo bash php2shell-check.sh https://www.example.com
+sudo bash php2shell-check.sh https://your-site.example
 ```
 
 Without root it still runs, but it cannot see containers or other users'
 processes and says so in the output.
-
-For websites only, from any machine, including a Mac:
-
-```sh
-./php2shell-check.sh --remote-only https://www.example.com https://shop.example.com
-```
 
 | Option | Effect |
 |---|---|
