@@ -1374,16 +1374,33 @@ if command -v frankenphp >/dev/null 2>&1; then echo frankenphp; fi' 2>/dev/null 
 }
 
 _p2s_check_stale_processes() {
-    local _p _exe _name _stale=''
-    [ -d /proc ] && [ "$(id -u)" -eq 0 ] || return 0
-    for _p in /proc/[0-9]*; do
-        _exe=$(readlink "$_p/exe" 2>/dev/null) || continue
+    local _p _exe _name _comm _state _rc _stale='' _unreadable=0
+    [ -d "$_p2s_proc" ] && [ "$(id -u)" -eq 0 ] || return 0
+    for _p in "$_p2s_proc"/[0-9]*; do
+        [ -d "$_p" ] || continue
+        if ! _exe=$(readlink "$_p/exe" 2>/dev/null); then
+            # Root inside a container can still lack access to workers owned
+            # by another uid. Do not turn an unreadable PHP process into ok.
+            _comm=$(cat "$_p/comm" 2>/dev/null | _p2s_clean 40)
+            case "$_comm" in
+                *php*|apache2|httpd)
+                    _state=$(awk '/^State:/{print $2;exit}' "$_p/status" 2>/dev/null)
+                    case "$_state" in Z|X|x) continue ;; esac
+                    [ -d "$_p" ] && _unreadable=$(( _unreadable + 1 )) ;;
+            esac
+            continue
+        fi
         case "$_exe" in
             *php*' (deleted)')
                 _name=$(basename "${_exe% (deleted)}" | _p2s_clean 40) ;;
             *apache2|*httpd)
-                grep -q 'libphp.*(deleted)' "$_p/maps" 2>/dev/null || continue
-                _name="$(basename "$_exe" | _p2s_clean 40) (mod_php)" ;;
+                grep -q 'libphp.*(deleted)' "$_p/maps" 2>/dev/null
+                _rc=$?
+                case "$_rc" in
+                    0) _name="$(basename "$_exe" | _p2s_clean 40) (mod_php)" ;;
+                    1) continue ;;
+                    *) [ -d "$_p" ] && _unreadable=$(( _unreadable + 1 )); continue ;;
+                esac ;;
             *) continue ;;
         esac
         case "$_stale" in *" $_name"*) ;; *) _stale="$_stale $_name" ;; esac
@@ -1392,7 +1409,11 @@ _p2s_check_stale_processes() {
     if [ -n "$_stale" ]; then
         _p2s_add warn process 'host' "still running the replaced PHP binary:$_stale" \
             'PHP was updated on disk but not restarted: restart PHP-FPM and/or the web server'
-    else
+    fi
+    if [ "$_unreadable" -gt 0 ]; then
+        _p2s_add unknown process 'host' "cannot inspect $_unreadable visible PHP/Apache processes; their restart state is unknown" \
+            'Check process inspection permissions, or run inside the affected container with permission to read its workers'
+    elif [ -z "$_stale" ]; then
         _p2s_add ok process 'host' 'no PHP process runs a replaced binary'
     fi
 }
