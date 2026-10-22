@@ -227,6 +227,26 @@ is reachable unless you pass `--origin`.
 Remote banners are hints. Hiding `X-Powered-By` makes the remote check
 quiet. It does not patch anything.
 
+Forced PHP settings are read line by line, not parsed. The advisory asks
+to check "that no pool, directory or application setting puts a finite limit
+back", so the script reads `php_admin_value` / `php_value` in FPM pools, in
+the Apache configuration under `sites-enabled`, `conf-enabled`, `vhosts.d`
+and `httpd/conf.d`, and single-line `fastcgi_param PHP_VALUE` /
+`PHP_ADMIN_VALUE` in the nginx configuration. It does not follow `include`
+directives, does not evaluate `<Directory>`, `<Files>` or `<IfModule>`
+sections, does not work out which file wins when two set the same value, and
+does not read the newline-separated nginx form that carries several settings
+in one quoted string. `.htaccess`, `.user.ini` and anything an application
+sets at runtime stay invisible. A pool or vhost it does report is a real
+finding; silence here is not a clean bill of health.
+
+No result in the `mitigation` check is an *ok*. php.net opens the
+section these checks follow with "while only an update is a complete solution,
+the following measures reduce exposure to specific attack paths but do not
+make an installation safe", so a host with every readable measure in place is
+reported as *info*: counted nowhere, no effect on the exit code. A mitigation
+is not a patch.
+
 ## Keeping the data current
 
 Everything that decides a verdict sits in three short functions at the top of

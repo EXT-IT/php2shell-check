@@ -58,7 +58,11 @@ if [ -n "\$_fake_ini" ] && [ -r "\$_fake_ini" ]; then
     _fake_v=\$(sed -n 's/^[[:space:]]*expose_php[[:space:]]*=[[:space:]]*//p' "\$_fake_ini" | tail -n1)
     [ -n "\$_fake_v" ] && _fake_expose=\$_fake_v
 fi
-printf 'memory_limit=256M\npost_max_size=8M\nmax_input_nesting_level=8\n'
+# memory_limit=-1 and post_max_size=8M with upload_max_filesize below it is
+# the state the advisory asks for. It used to be memory_limit=256M, which the
+# check read and never judged; now a finite value is a missing measure, so a
+# host meant to stand for "measures in place" has to carry -1.
+printf 'memory_limit=-1\npost_max_size=8M\nupload_max_filesize=2M\nmax_input_nesting_level=8\n'
 printf 'session.upload_progress.enabled=%s\nexpose_php=%s\nfatal_error_backtraces=n/a\n' \\
     "\$_fake_upload" "\$_fake_expose"
 EOF
@@ -173,7 +177,15 @@ printf '[PHP]\nsession.upload_progress.enabled = 0\nexpose_php = 0\n' \
 printf '[PHP]\nsession.upload_progress.enabled = 1\nexpose_php = 0\n' \
     > "$_hl_root/etc/php/8.3/fpm/php.ini"
 _hl_php "$_hl_root/usr/bin/php8.3" 8.3.36 "$_hl_root/etc/php/8.3/cli/php.ini"
-_t_run 'A17 the CLI ini is reported ok' 0 'OK \] mitigation +/usr/bin/php8\.3 \(CLI\)' \
+# The old expectation here was 'OK ] mitigation'. That was wrong twice over:
+# the advisory's own section says these measures "do not make an installation
+# safe", so no state of them can be an ok, and this host carried a finite
+# memory_limit, which the check read and never judged. The clean side is now
+# info -- counted nowhere, no effect on the exit code, which is the point.
+_t_run 'A17 the CLI ini is reported as info, not ok' 0 'INFO\] mitigation +/usr/bin/php8\.3 \(CLI\)' \
+    env P2S_TEST_ROOT="$_hl_root" bash "$_t_script" --no-color
+_t_run 'A17 and the info line says a mitigation is no patch' 0 \
+    'do not make an installation safe' \
     env P2S_TEST_ROOT="$_hl_root" bash "$_t_script" --no-color
 _t_run 'A17 the fpm ini is reported as a warning' 0 'WARN\] mitigation +/usr/bin/php8\.3 \(fpm php\.ini\)' \
     env P2S_TEST_ROOT="$_hl_root" bash "$_t_script" --no-color

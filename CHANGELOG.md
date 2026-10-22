@@ -8,6 +8,65 @@ Changes to the vulnerability data (fixed versions, distribution packages) are
 listed separately from code changes, because they change verdicts without
 changing behaviour.
 
+## [Unreleased]
+
+### Changed
+
+- The `mitigation` check follows php.net, section "If you cannot update
+  immediately", instead of contradicting it in five places. Measured before
+  the change: a host with `memory_limit=-1` and `post_max_size=2048M` was
+  reported as `[OK] advisory mitigations in place`.
+  - `memory_limit` is judged. It is the first measure in that section
+    (`-1`, "preferably in a way applications can't override"), and the check
+    read the value and never looked at it. `-1` satisfies the measure, a
+    finite value is a missing one.
+  - `post_max_size` is measured against the two absolute values the section
+    names: 8M for applications that don't require file uploads, 32M if uploads
+    are necessary. The old rule — below a quarter of `memory_limit` — stood in
+    no source and was dead code at `memory_limit=-1`, because its condition
+    required a positive limit. Up to 8M satisfies the section either way,
+    above 32M fails it either way, and a value in between is reported with
+    both numbers: the script cannot know whether an installation needs
+    uploads, so it does not decide that silently.
+  - `upload_max_filesize` is read and checked against `post_max_size`, which
+    the section asks for and the probe did not even collect.
+  - `expose_php` is no longer counted as one of the advisory's measures. It is
+    not in that section, it decides whether the version is in the response
+    headers rather than whether the bug can be reached, and counting it tipped
+    the verdict of hosts whose real measures were all in place. It now gets
+    its own `disclosure` line, the same shape the remote check already used.
+  - `max_input_nesting_level` no longer claims the advisory asks for "about
+    8". The section names no value for that setting; it asks for nesting depth
+    to be limited at the web server or proxy level, and that is what the line
+    now says.
+  - The verdict for a host with every readable measure in place is `info`, not
+    `ok`. The section opens with "while only an update is a complete solution,
+    the following measures reduce exposure to specific attack paths but do not
+    make an installation safe", and that sentence is now in the output.
+    `info` is counted nowhere and changes no exit code, which is the point.
+  - The hints name where the section wants each setting applied
+    (`php_admin_value` in the FPM pool or the Apache configuration) and say to
+    restart every worker, which no hint said before.
+- `pm.max_requests` is no longer presented as a temporary mitigation. It is
+  not in the advisory; the line stays, the wording says so.
+
+### Added
+
+- `php_admin_value` / `php_value` in FPM pools, in the Apache configuration
+  and as a single-line `fastcgi_param PHP_VALUE` / `PHP_ADMIN_VALUE` in the
+  nginx configuration. The ini probe reads `php.ini` and `PHP_INI_SCAN_DIR`
+  and was blind to exactly the place the advisory asks for the setting to be
+  made. A pool or vhost that contradicts `php.ini` is reported as a warning
+  naming both values, so the `php.ini` line in the report cannot be read as
+  covering that scope. A pool that forces `memory_limit=-1` while `php.ini` is
+  finite is the shape the advisory recommends and is reported as info.
+  Read line by line, no configuration parser — README lists what that misses.
+- `RLIMIT_AS` / `RLIMIT_DATA` on PHP, read from `/proc/<pid>/limits` of a
+  running PHP process and from `LimitAS=` / `LimitDATA=` in the systemd units
+  and drop-ins that start PHP. The advisory asks for a container or cgroup
+  limit and says not to substitute these two, "as these can cause the
+  vulnerable allocation failure", so a finite one is a warning.
+
 ## [1.6.0] - 2026-10-22
 
 Built from two measured runs on a test host: an Ubuntu 26.04 matrix (mod_php

@@ -437,46 +437,322 @@ _p2s_add_verdict() {   # _p2s_add_verdict CHECK TARGET "status|detail|hint"
 }
 
 # ---------------------------------------------------------------------------
-# Runtime configuration (temporary mitigations from the advisory)
+# Runtime configuration: the temporary measures from php.net, section
+# "If you cannot update immediately" (https://www.php.net/archive/2026.php).
+#
+# Every judgement below follows that section and nothing else. What it asks
+# for, and what this script can read:
+#   - memory_limit=-1, "preferably in a way applications can't override, such
+#     as php_admin_value in the FPM pool or Apache configuration", and a check
+#     "that no pool, directory or application setting puts a finite limit
+#     back". This is the first measure in the section.
+#   - a low post_max_size: 8M for applications that don't require file
+#     uploads, 32M if uploads are necessary, with upload_max_filesize kept
+#     below post_max_size.
+#   - session.upload_progress.enabled=0 and a restart of every worker, through
+#     php.ini, an FPM pool or server configuration that applies before request
+#     parsing -- not ini_set() and not an FPM .user.ini.
+#   - on PHP 8.5, fatal_error_backtraces=0 and a restart of every worker.
+#   - the request limits (decoded size, field count, multipart part count,
+#     header count, nesting depth) enforced at the web server or proxy level.
+#     The section names no value for max_input_nesting_level, so this script
+#     reports that setting as context and never as a missing measure.
+#   - no RLIMIT_AS or RLIMIT_DATA as a substitute for a container or cgroup
+#     limit, because "these can cause the vulnerable allocation failure".
+#
+# Settings the section does not name are not reported as its measures:
+# expose_php (a disclosure question, its own line below, same as the remote
+# check gives it), max_input_vars and pm.max_requests.
+#
+# And no result here is an "ok", because the section opens with: "while only
+# an update is a complete solution, the following measures reduce exposure to
+# specific attack paths but do not make an installation safe." Until 1.6.0
+# this check answered "[OK] advisory mitigations in place", which said the
+# opposite of its own source.
 # ---------------------------------------------------------------------------
 
+# The advisory's two absolute numbers for post_max_size, as bytes.
+_P2S_POST_NO_UPLOADS=8M
+_P2S_POST_UPLOADS=32M
+
+# What php.ini says, kept for the pool and vhost checks further down: a pool
+# or vhost that forces another value makes the php.ini line in this report
+# untrue for that scope.
+_p2s_ini_src=''
+_p2s_ini_mem=''
+_p2s_ini_post=''
+_p2s_ini_upload=''
+_p2s_ini_upprog=''
+
 # shellcheck disable=SC2016  # PHP code, $k and $v belong to PHP
-_P2S_INI_CODE='foreach (["memory_limit","post_max_size","max_input_nesting_level","session.upload_progress.enabled","expose_php","fatal_error_backtraces"] as $k) { $v = ini_get($k); echo $k, "=", ($v === false ? "n/a" : $v), "\n"; }'
+_P2S_INI_CODE='foreach (["memory_limit","post_max_size","upload_max_filesize","max_input_nesting_level","session.upload_progress.enabled","expose_php","fatal_error_backtraces"] as $k) { $v = ini_get($k); echo $k, "=", ($v === false ? "n/a" : $v), "\n"; }'
 
 # _p2s_check_ini TARGET cmd... (cmd runs php with -r appended)
 _p2s_check_ini() {
-    local _tg=$1 _out _k _v _mem='' _post='' _missing='' _note='' _mb _pb
+    local _tg=$1 _out _k _v _mem='' _post='' _upl='' _expose='' _upprog='' \
+          _missing='' _note='' _mb _pb _ub _p8 _p32
     shift
-    _out=$(_p2s_timeout 5 "$@" -r "$_P2S_INI_CODE" 2>/dev/null | head -n 10 | _p2s_clean_lines) || return 0
+    _out=$(_p2s_timeout 5 "$@" -r "$_P2S_INI_CODE" 2>/dev/null | head -n 20 | _p2s_clean_lines) || return 0
     [ -n "$_out" ] || return 0
     while IFS='=' read -r _k _v; do
+        # "=" is the only separator, so a value keeps any padding around it.
+        # Several judgements below compare it exactly ("-1", "On"), and a
+        # stray space would turn a satisfied measure into a missing one.
+        _k=${_k//[[:space:]]/}
+        _v=${_v//[[:space:]]/}
         case "$_k" in
-            memory_limit) _mem=$_v ;;
-            post_max_size) _post=$_v ;;
+            memory_limit)        _mem=$_v ;;
+            post_max_size)       _post=$_v ;;
+            upload_max_filesize) _upl=$_v ;;
+            expose_php)          _expose=$_v ;;
             session.upload_progress.enabled)
+                _upprog=$_v
                 case "$_v" in 1|On|on) _missing="$_missing session.upload_progress.enabled=0" ;; esac ;;
-            expose_php)
-                case "$_v" in 1|On|on) _missing="$_missing expose_php=0" ;; esac ;;
             fatal_error_backtraces)
+                # ini_get answers false below PHP 8.5, which the probe prints
+                # as n/a. The advisory asks for this one on 8.5 only, so a
+                # host without the setting has nothing to set.
                 case "$_v" in 1|On|on) _missing="$_missing fatal_error_backtraces=0" ;; esac ;;
             max_input_nesting_level)
-                if [[ "$_v" =~ ^[0-9]+$ ]] && [ "$_v" -gt 8 ]; then
-                    _note="$_note max_input_nesting_level is $_v (advisory: about 8, test your application first)."
+                if [[ "$_v" =~ ^[0-9]+$ ]]; then
+                    _note="$_note max_input_nesting_level is $_v; the advisory asks for nesting depth to be limited at the web server or proxy level and names no value for this PHP setting."
                 fi ;;
         esac
     done <<EOF
 $_out
 EOF
-    _mb=$(_p2s_bytes "$_mem"); _pb=$(_p2s_bytes "$_post")
-    if [ "$_mb" -gt 0 ] && [ "$_pb" -gt 0 ] && [ "$_pb" -ge $(( _mb / 4 )) ]; then
-        _missing="$_missing post_max_size<memory_limit/4 (now $_post vs $_mem)"
+    # memory_limit=-1 is the section's first measure: it removes the
+    # controllable PHP memory limit failure. A finite value leaves it in
+    # place, so it is a missing measure. Until 1.6.0 this value was read and
+    # never judged, which is what let a badly configured host come out green.
+    _mb=$(_p2s_bytes "$_mem")
+    if [ "$_mem" != -1 ] && [ "$_mem" != n/a ] && [ -n "$_mem" ] && [ "$_mb" -ge 0 ]; then
+        _missing="$_missing memory_limit=-1 (now $_mem)"
     fi
+
+    # post_max_size against the two numbers the advisory names. This script
+    # cannot know whether an installation needs file uploads, so it never
+    # picks one of the two for the reader: up to 8M satisfies the section
+    # either way, above 32M fails it either way, and in between the value
+    # holds only for an installation that does need uploads -- which is said
+    # in those words instead of being decided silently.
+    _pb=$(_p2s_bytes "$_post")
+    _p8=$(_p2s_bytes "$_P2S_POST_NO_UPLOADS")
+    _p32=$(_p2s_bytes "$_P2S_POST_UPLOADS")
+    case "$_post" in
+        0|-1)
+            # PHP reads 0 as "do not check the size at all".
+            _missing="$_missing a low post_max_size ($_P2S_POST_NO_UPLOADS without file uploads, $_P2S_POST_UPLOADS with; now $_post, no limit)" ;;
+        *)
+            if [ "$_pb" -gt "$_p32" ]; then
+                _missing="$_missing a low post_max_size ($_P2S_POST_NO_UPLOADS without file uploads, $_P2S_POST_UPLOADS with; now $_post)"
+            elif [ "$_pb" -gt "$_p8" ]; then
+                _note="$_note post_max_size is $_post: the advisory asks for $_P2S_POST_NO_UPLOADS where file uploads are not required and $_P2S_POST_UPLOADS where they are, so this value is low enough only if this installation needs uploads."
+            fi ;;
+    esac
+
+    # "Keep upload_max_filesize below post_max_size."
+    _ub=$(_p2s_bytes "$_upl")
+    if [ "$_ub" -gt 0 ] && [ "$_pb" -gt 0 ] && [ "$_ub" -ge "$_pb" ]; then
+        _missing="$_missing upload_max_filesize below post_max_size (now $_upl vs $_post)"
+    fi
+
+    # expose_php is not one of the advisory's measures. It decides whether the
+    # version is in the response headers, not whether the bug can be reached,
+    # so it gets the same kind of line the remote check gives it and must not
+    # decide the verdict below. Until 1.6.0 it did, and tipped hosts whose
+    # real measures were all in place.
+    case "$_expose" in
+        1|On|on)
+            _p2s_add warn disclosure "$_tg" 'expose_php is on, so the PHP version is in the response headers for everyone' \
+                'Set expose_php=0 so scanners cannot pick vulnerable targets by header' ;;
+        0|Off|off)
+            _p2s_add ok disclosure "$_tg" 'expose_php is off, the response headers do not reveal the PHP version' ;;
+    esac
+
     if [ -n "$_missing" ]; then
-        _p2s_add warn mitigation "$_tg" "temporary mitigations not set:$_missing.$_note" \
-            "Until patched: set session.upload_progress.enabled=0 and expose_php=0, keep post_max_size below a quarter of memory_limit"
+        _p2s_add warn mitigation "$_tg" "temporary measures from the advisory not set:$_missing.$_note" \
+            'Until patched: set memory_limit=-1 and session.upload_progress.enabled=0 where applications cannot override them (php_admin_value in the FPM pool or the Apache configuration), keep post_max_size low, and restart every worker. Only an update is a complete solution'
     else
-        _p2s_add ok mitigation "$_tg" "advisory mitigations in place.$_note"
+        # Deliberately info, not ok: info is counted nowhere and changes no
+        # exit code, which is the point -- a mitigation is not a patch.
+        _p2s_add info mitigation "$_tg" "the temporary measures from the advisory that are readable here are set.$_note Only an update is a complete solution: these measures reduce exposure to specific attack paths but do not make an installation safe."
     fi
+
+    # Remember php.ini for the pool and vhost checks. The FPM php.ini wins
+    # when several were probed: that is the one the pools build on.
+    case "$_tg" in
+        *'(fpm php.ini)'*) : ;;
+        *) [ -z "$_p2s_ini_src" ] || return 0 ;;
+    esac
+    _p2s_ini_src=$_tg
+    _p2s_ini_mem=$_mem
+    _p2s_ini_post=$_post
+    _p2s_ini_upload=$_upl
+    _p2s_ini_upprog=$_upprog
+}
+
+# php.ini is not the last word. An FPM pool, an Apache section or a
+# fastcgi_param can force another value, and the advisory asks explicitly to
+# check "that no pool, directory or application setting puts a finite limit
+# back" -- that is also where it wants memory_limit=-1 to be set in the first
+# place. Read line by line, without a configuration parser: no include is
+# followed, no conditional section is evaluated, no precedence between files
+# is computed. README says what that misses.
+#
+# Prints one "name=value" per forced setting.
+_p2s_forced_settings() {   # file kind(fpm|apache|nginx)
+    case "$2" in
+        fpm)
+            # php_admin_value[memory_limit] = -1
+            grep -E '^[[:space:]]*php_(admin_)?(value|flag)\[[A-Za-z0-9_.]+\][[:space:]]*=' "$1" 2>/dev/null \
+                | sed -E 's/^[[:space:]]*php_(admin_)?(value|flag)\[([A-Za-z0-9_.]+)\][[:space:]]*=[[:space:]]*/\3=/' ;;
+        apache)
+            # php_admin_value memory_limit -1
+            grep -E '^[[:space:]]*php_(admin_)?(value|flag)[[:space:]]+[A-Za-z0-9_.]+[[:space:]]+[^[:space:]]' "$1" 2>/dev/null \
+                | sed -E 's/^[[:space:]]*php_(admin_)?(value|flag)[[:space:]]+([A-Za-z0-9_.]+)[[:space:]]+"?([^"[:space:]]+)"?.*$/\3=\4/' ;;
+        nginx)
+            # fastcgi_param PHP_ADMIN_VALUE "memory_limit=-1";
+            # Only the single-line form. nginx can carry several settings in
+            # one newline-separated quoted string, and that shape is not
+            # readable without a parser.
+            grep -E 'fastcgi_param[[:space:]]+PHP_(ADMIN_)?VALUE' "$1" 2>/dev/null \
+                | grep -oE '[A-Za-z0-9_.]+[[:space:]]*=[[:space:]]*[^";[:space:]]+' \
+                | sed -E 's/[[:space:]]*=[[:space:]]*/=/' ;;
+    esac | head -n 40 | _p2s_clean_lines
+}
+
+# The section header for forced settings, opened only when there is one.
+_p2s_forced_pending=''
+_p2s_forced_open() {
+    [ -n "$_p2s_forced_pending" ] || return 0
+    _p2s_section "$_p2s_forced_pending"
+    _p2s_forced_pending=''
+}
+
+# Judge every setting one file forces, against the same advisory text as
+# php.ini, and name the contradiction when php.ini says something else: the
+# php.ini line in this report does not describe that scope.
+_p2s_check_forced_file() {   # file kind target
+    local _f=$1 _kind=$2 _tg=$3 _k _v _diff _b _p32
+    _p32=$(_p2s_bytes "$_P2S_POST_UPLOADS")
+    while IFS='=' read -r _k _v; do
+        _k=${_k//[[:space:]]/}
+        _v=${_v//[[:space:]]/}
+        [ -n "$_k" ] && [ -n "$_v" ] || continue
+        case "$_k" in
+            memory_limit)
+                _diff=''
+                if [ -n "$_p2s_ini_mem" ] && [ "$_p2s_ini_mem" != "$_v" ]; then
+                    _diff=" php.ini reads memory_limit = $_p2s_ini_mem, so the php.ini line in this report does not describe this scope."
+                fi
+                if [ "$_v" = -1 ]; then
+                    # This is where the advisory wants the setting to be, so
+                    # it is not a warning even when php.ini disagrees.
+                    _p2s_forced_open
+                    _p2s_add info forced-ini "$_tg" "forces memory_limit = -1 where applications cannot override it, which is what the advisory asks for.$_diff"
+                else
+                    _p2s_forced_open
+                    _p2s_add warn forced-ini "$_tg" "forces memory_limit = $_v, a finite limit; the advisory asks to check that no pool, directory or application setting puts one back.$_diff" \
+                        'Set memory_limit=-1 in the pool or vhost as well, or drop the line, then restart every worker'
+                fi ;;
+            post_max_size)
+                _b=$(_p2s_bytes "$_v")
+                if [ "$_v" = 0 ] || [ "$_v" = -1 ] || [ "$_b" -gt "$_p32" ]; then
+                    _p2s_forced_open
+                    _p2s_add warn forced-ini "$_tg" "forces post_max_size = $_v, above both values the advisory names ($_P2S_POST_NO_UPLOADS without file uploads, $_P2S_POST_UPLOADS with)" \
+                        'Lower post_max_size in the pool or vhost as well, then restart every worker'
+                fi ;;
+            session.upload_progress.enabled)
+                case "$_v" in
+                    1|On|on|true)
+                        _diff=''
+                        if [ -n "$_p2s_ini_upprog" ] && [ "$_p2s_ini_upprog" != "$_v" ]; then
+                            _diff=" php.ini reads $_p2s_ini_upprog, so the php.ini line in this report does not describe this scope."
+                        fi
+                        _p2s_forced_open
+                        _p2s_add warn forced-ini "$_tg" "forces session.upload_progress.enabled = $_v, the setting the advisory asks to turn off.$_diff" \
+                            'Set session.upload_progress.enabled=0 in the pool or vhost as well, then restart every worker' ;;
+                esac ;;
+        esac
+    done <<EOF
+$(_p2s_forced_settings "$_f" "$_kind")
+EOF
+}
+
+_p2s_check_vhost_overrides() {
+    local _f
+    _p2s_forced_pending='PHP settings forced by the web server'
+    for _f in "$_p2s_root"/etc/apache2/apache2.conf "$_p2s_root"/etc/apache2/sites-enabled/*.conf \
+              "$_p2s_root"/etc/apache2/conf-enabled/*.conf "$_p2s_root"/etc/apache2/vhosts.d/*.conf \
+              "$_p2s_root"/etc/httpd/conf/httpd.conf "$_p2s_root"/etc/httpd/conf.d/*.conf; do
+        [ -f "$_f" ] && [ -r "$_f" ] || continue
+        _p2s_check_forced_file "$_f" apache "${_f#"$_p2s_root"}"
+    done
+    for _f in "$_p2s_root"/etc/nginx/nginx.conf "$_p2s_root"/etc/nginx/conf.d/*.conf \
+              "$_p2s_root"/etc/nginx/sites-enabled/*; do
+        [ -f "$_f" ] && [ -r "$_f" ] || continue
+        _p2s_check_forced_file "$_f" nginx "${_f#"$_p2s_root"}"
+    done
+    _p2s_forced_pending=''
+}
+
+# The advisory names RLIMIT_AS and RLIMIT_DATA as what NOT to use: it asks for
+# "a container or cgroup limit as an availability boundary, preferably with a
+# policy that kills only the affected worker" and adds "do not substitute
+# RLIMIT_AS or RLIMIT_DATA, as these can cause the vulnerable allocation
+# failure". So a finite one on a PHP process, or in the unit that starts it,
+# is worth a warning whatever it was set for.
+_p2s_check_rlimits() {
+    local _p _e _as _data _unit _hit _key _seen=' '
+    _p2s_forced_pending='Address-space limits on PHP'
+    # /proc, the same test hook the process fallback uses.
+    if [ -z "$_p2s_root" ] || [ -n "${P2S_PROC_ROOT:-}" ]; then
+        if [ -d "$_p2s_proc" ]; then
+            for _p in "$_p2s_proc"/[0-9]*; do
+                _e=$(readlink "$_p/exe" 2>/dev/null) || continue
+                _e=${_e% (deleted)}
+                case "$_e" in
+                    */php|*/php[0-9]*|*/php-fpm|*/php-fpm[0-9]*|*/lsphp|*/lsphp[0-9]* \
+                    |*/php-cgi|*/php-cgi[0-9]*|*/cgi-bin/php*|*/frankenphp) ;;
+                    *) continue ;;
+                esac
+                [ -r "$_p/limits" ] || continue
+                # Both names are three words wide, so the soft limit is field
+                # four. Spelled out instead of an awk interval expression:
+                # mawk 1.3.4 20200120 does not match those at all.
+                _as=$(awk '/^Max address space/ { print $4; exit }' "$_p/limits" 2>/dev/null)
+                _data=$(awk '/^Max data size/ { print $4; exit }' "$_p/limits" 2>/dev/null)
+                _hit=''
+                [[ "$_as" =~ ^[0-9]+$ ]] && _hit="$_hit RLIMIT_AS=$_as"
+                [[ "$_data" =~ ^[0-9]+$ ]] && _hit="$_hit RLIMIT_DATA=$_data"
+                [ -n "$_hit" ] || continue
+                # One line per binary and limit pair: an FPM pool has dozens
+                # of children that all carry the same limits.
+                _key=$(printf '%s%s' "$_e" "$_hit" | _p2s_clean 160 | tr -d ' ')
+                case "$_seen" in *" $_key "*) continue ;; esac
+                _seen="$_seen$_key "
+                _p2s_forced_open
+                _p2s_add warn rlimit "$(printf '%s' "$_e" | _p2s_clean 80)" \
+                    "runs with a finite address-space limit ($_hit bytes); the advisory asks not to substitute RLIMIT_AS or RLIMIT_DATA for a container or cgroup limit, because these can cause the vulnerable allocation failure" \
+                    'Drop the RLIMIT_AS / RLIMIT_DATA limit and bound memory with a container or cgroup limit that kills only the affected worker'
+            done
+        fi
+    fi
+    for _unit in "$_p2s_root"/etc/systemd/system/*php*.service "$_p2s_root"/etc/systemd/system/*php*.service.d/*.conf \
+                 "$_p2s_root"/etc/systemd/system/*frankenphp*.service "$_p2s_root"/etc/systemd/system/*frankenphp*.service.d/*.conf \
+                 "$_p2s_root"/lib/systemd/system/*php*.service "$_p2s_root"/lib/systemd/system/*frankenphp*.service \
+                 "$_p2s_root"/usr/lib/systemd/system/*php*.service "$_p2s_root"/usr/lib/systemd/system/*frankenphp*.service; do
+        [ -f "$_unit" ] && [ -r "$_unit" ] || continue
+        _hit=$(grep -E '^[[:space:]]*Limit(AS|DATA)[[:space:]]*=' "$_unit" 2>/dev/null \
+               | grep -viE '=[[:space:]]*(infinity|unlimited)' | head -n 4 | tr '\n' ' ' | _p2s_clean 120)
+        [ -n "$_hit" ] || continue
+        _p2s_forced_open
+        _p2s_add warn rlimit "${_unit#"$_p2s_root"}" \
+            "sets a finite address-space limit ($_hit); the advisory asks not to substitute RLIMIT_AS or RLIMIT_DATA for a container or cgroup limit, because these can cause the vulnerable allocation failure" \
+            'Drop the RLIMIT_AS / RLIMIT_DATA limit and bound memory with a container or cgroup limit that kills only the affected worker'
+    done
+    _p2s_forced_pending=''
 }
 
 _p2s_clean_lines() { tr -dc 'A-Za-z0-9_.:/=<>() \n-' | head -c 1000; }
@@ -618,11 +894,17 @@ _p2s_check_fpm_pools() {
         fi
         _v=$(grep -E '^[[:space:]]*pm\.max_requests[[:space:]]*=' "$_f" 2>/dev/null | tail -n1 | cut -d= -f2 | tr -dc '0-9')
         if [ -z "$_v" ] || [ "$_v" = 0 ]; then
+            # Not one of the advisory's measures, and not presented as one:
+            # recycling workers only shortens how long one keeps stale state.
             _p2s_add info fpm-pool "${_f#"$_p2s_root"}" 'pm.max_requests is unlimited, workers keep corrupted state for their whole life' \
-                'Temporary mitigation: set a low pm.max_requests (for example 500) and reload PHP-FPM'
+                'A low pm.max_requests (for example 500) retires workers sooner; it is not one of the advisory measures'
         else
             _p2s_add ok fpm-pool "${_f#"$_p2s_root"}" "pm.max_requests = $_v"
         fi
+        # php_admin_value / php_value in this pool. The advisory wants
+        # memory_limit=-1 set exactly here, and asks to check that nothing
+        # here puts a finite limit back.
+        _p2s_check_forced_file "$_f" fpm "${_f#"$_p2s_root"}"
     done
 }
 
@@ -1243,6 +1525,8 @@ if [ "$_opt_remote_only" -eq 0 ]; then
         _p2s_check_binaries
         _p2s_check_sapi
         _p2s_check_fpm_pools
+        _p2s_check_vhost_overrides
+        _p2s_check_rlimits
         [ "$_opt_containers" -eq 1 ] && [ -z "$_p2s_root" ] && _p2s_check_containers
         if [ -z "$_p2s_root" ]; then
             _p2s_check_stale_processes
