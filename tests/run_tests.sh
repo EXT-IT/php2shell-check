@@ -111,7 +111,11 @@ else
     _t_ok '--no-logs output has no log lines'
 fi
 _t_mkempty=$(mktemp -d "$_t_tmp/empty.XXXX")
-_t_run 'host without PHP exits 0'       0 'no PHP installation found'         env P2S_TEST_ROOT="$_t_mkempty" bash "$_t_script" --no-color
+# Exit 2, not 0: the known paths and the process list holding nothing is not
+# the same as this host running no PHP, and a run that judged no PHP runtime
+# says nothing about the host. The old expectation (0) was how a run that
+# examined nothing came out green.
+_t_run 'host without PHP is undecided'  2 'no PHP installation found'         env P2S_TEST_ROOT="$_t_mkempty" bash "$_t_script" --no-color
 
 echo "JSON output"
 if command -v python3 >/dev/null 2>&1; then
@@ -132,7 +136,11 @@ if command -v python3 >/dev/null 2>&1 && command -v curl >/dev/null 2>&1; then
     while [ ! -s "$_t_tmp/port" ] && [ "$_i" -lt 50 ]; do _i=$(( _i + 1 )); sleep 0.1; done
     _t_base="http://127.0.0.1:$(cat "$_t_tmp/port")"
     _t_run 'banner 8.3.35 is vulnerable'   1 'VULN\] php-banner'   bash "$_t_script" -r --no-color "$_t_base/vulnerable"
-    _t_run 'banner 8.3.36 is fine'         0 'OK \] php-banner'    bash "$_t_script" -r --no-color "$_t_base/fixed"
+    # Undecided, not ok: X-Powered-By is self-declared. The old expectation
+    # let a run whose only input was a header exit 0 as "no vulnerable PHP
+    # found", while the same output said it cannot confirm a patch level.
+    _t_run 'banner 8.3.36 is undecided'    2 '\?\? \] php-banner'  bash "$_t_script" -r --no-color "$_t_base/fixed"
+    _t_run 'and says a header is self-declared' 2 'self-declared' bash "$_t_script" -r --no-color "$_t_base/fixed"
     _t_run 'frozen distro banner is undecided' 2 'cannot be judged' bash "$_t_script" -r --no-color "$_t_base/distro"
     _t_run 'EOL banner is vulnerable'      1 'no fixed release'    bash "$_t_script" -r --no-color "$_t_base/eol"
     _t_run 'version disclosure warns'      1 'WARN\] disclosure'   bash "$_t_script" -r --no-color "$_t_base/vulnerable"

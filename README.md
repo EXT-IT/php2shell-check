@@ -114,6 +114,21 @@ Exit codes: `0` nothing vulnerable found, `1` vulnerable, `2` could not decide,
 `3` usage error. Warnings (missing mitigations, version disclosure) do not
 change the exit code.
 
+`0` is reserved for a run that actually judged a PHP runtime and found all of
+them patched. Three cases that used to end in `0` now end in `2`, because
+"nothing to report" and "nothing examined" are not the same answer:
+
+- a run that judged no PHP at all — no PHP in the known paths, none in the
+  process list, or the local checks could not run on this platform
+- a website whose header announces a patched version: `X-Powered-By` is
+  self-declared and can be set by the application, a cache or a proxy with a
+  different PHP behind it
+- a package below the upstream fix on an RPM distribution whose changelog does
+  not name the CVE
+
+A version *below* the fix is still `1`, from a header too: if that header
+lies, it only costs a look.
+
 ## What it checks
 
 On the server:
@@ -123,7 +138,7 @@ On the server:
 | `php-binary` | every PHP in `/usr/bin`, `/usr/sbin`, `/usr/local`, Plesk (`/opt/plesk/php`), cPanel EasyApache (`/opt/cpanel/ea-php*`), CloudLinux alt-php, Remi, LiteSpeed, `php-cgi` including `/usr/lib/cgi-bin`, FrankenPHP (read out of `frankenphp version`, which carries the embedded PHP version), **plus every PHP that is currently running**, taken from the process list, so a build in an unusual path is not missed. Debian and Ubuntu packages are judged by package version against the distribution's fix, RPM packages below the upstream fix by whether their changelog names the CVE; everything else by upstream version |
 | `sapi` | how PHP is served, and every way at once when a host has several. The advisory validated the session-lifecycle RCE against **mod_php and PHP-FPM** alike, names `php-cgi`, LiteSpeed and FrankenPHP as at risk without validating them, and this is what decides the order of patching. Detected on the host and inside each container. A host where none of them matches is told so rather than passed over in silence |
 | `container` | PHP inside every running Docker or Podman container, plus stopped containers whose image ships a vulnerable PHP and would bring it back on the next start. A Debian or Ubuntu based image is judged by the package database inside the container, for the same reason as the host: the upstream number stays unchanged when the fix is backported |
-| `mitigation` | the temporary settings from the advisory: `session.upload_progress.enabled`, `expose_php`, `post_max_size` against `memory_limit`, `max_input_nesting_level`, `fatal_error_backtraces`. On Debian layouts it reads the FPM and Apache `php.ini`, on the host and inside containers, not just the CLI one, because they differ |
+| `mitigation` | the temporary measures from the advisory's own section: `memory_limit=-1`, `post_max_size` against the 8M / 32M the advisory names, `upload_max_filesize` below it, `session.upload_progress.enabled`, `fatal_error_backtraces` on 8.5, and `max_input_nesting_level` as context. On Debian layouts it reads the FPM, Apache and CGI `php.ini`, on the host and inside containers, not just the CLI one, because they differ. `php_admin_value` / `php_value` in FPM pools and vhosts is read as well — that is where the advisory asks for the setting. `expose_php` is not one of these measures and has its own `disclosure` line |
 | `fpm-pool` | `pm.max_requests` in every PHP-FPM pool, and whether a pool runs as `root`, which would turn this bug into root code execution |
 | `process` | PHP-FPM, `lsphp` or Apache with `mod_php` still running the old binary after an update. A patched package is not a patched server until the service restarts |
 | `mac` | whether AppArmor or SELinux is active |

@@ -301,7 +301,9 @@ fi
 _ns_r=$(_ns_host quiet trixie)
 mkdir -p "$_ns_dir/quiet-proc/12/ns"
 ln -sf /usr/sbin/nginx "$_ns_dir/quiet-proc/12/exe"
-_t_run 'N7 a host with no PHP anywhere is unchanged' 0 'no PHP installation found' \
+# Unchanged in substance, but the result of a run that judged nothing is
+# undecided (exit 2), not clean.
+_t_run 'N7 a host with no PHP anywhere is undecided' 2 'no PHP installation found' \
     env P2S_TEST_ROOT="$_ns_r" P2S_PROC_ROOT="$_ns_dir/quiet-proc" bash "$_t_script" --no-color
 
 # ---------------------------------------------------------------------------

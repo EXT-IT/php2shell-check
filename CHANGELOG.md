@@ -8,7 +8,34 @@ Changes to the vulnerability data (fixed versions, distribution packages) are
 listed separately from code changes, because they change verdicts without
 changing behaviour.
 
-## [Unreleased]
+## [2.0.0] - 2026-10-22
+
+Three ways to a green result that said nothing, found by checking the script
+against its own sources and measuring the cases on a test host. Every one of
+them is a changed exit code, which is what makes this a major release: a
+pipeline that treats `0` as "all clear" will now see `2` where it used to see
+`0`. Nothing about a *vulnerable* verdict changed.
+
+### Breaking
+
+- A run that judged no PHP runtime is *undecided* (exit 2), not clean.
+  Measured before the change on a macOS host, where the local checks cannot
+  run at all: "Summary 0 vulnerable, 0 undecided, 0 warnings, 0 ok / NO
+  VULNERABLE PHP FOUND", exit 0. The lines that say "there was nothing here to
+  look at" were `info`, and `info` is counted nowhere. The summary now counts
+  judged runtimes separately from statuses, because a host with no PHP still
+  collects `ok` lines from the AppArmor and process checks and therefore
+  looked examined.
+- "No PHP installation found in the usual locations and none running" is
+  *undecided*, not informational. It means the known paths hold nothing, which
+  is not the same as this host running no PHP.
+- A website whose header announces a patched version is *undecided*, not `ok`.
+  `X-Powered-By` is self-declared: the application, a cache or a proxy with a
+  different PHP behind it can set it. The prose in the same output already
+  said the run "cannot confirm a patch level" while the exit code said clean —
+  the prose was right. A version below the fix is still a finding, from a
+  header too: if that header lies, it only costs a look.
+- The `mitigation` check no longer answers `ok`. See the entry below.
 
 ### Fixed
 

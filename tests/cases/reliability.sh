@@ -14,7 +14,11 @@ if [ -n "${_t_base:-}" ]; then
     fi
     _t_run 'PHPSESSID shows PHP is present'  2 'signal: PHPSESSID cookie' bash "$_t_script" -r --no-color "$_t_base/phpsess"
     _t_run 'wp-json shows PHP is present'    2 'signal: WordPress'        bash "$_t_script" -r --no-color "$_t_base/wordpress"
-    _t_run 'a visible fixed version is ok'   0 'OK \] php-banner'         bash "$_t_script" -r --no-color "$_t_base/fixed"
+    # A visible fixed version is the weakest kind of good news: the header
+    # can be set by the application, a cache or a proxy with another PHP
+    # behind it. It is undecided, in line with the promise this file tests
+    # everywhere else -- a check from outside never confirms a patch.
+    _t_run 'a visible fixed version is undecided' 2 '\?\? \] php-banner'  bash "$_t_script" -r --no-color "$_t_base/fixed"
 else
     echo "  skip  fixture server not available"
 fi
@@ -23,7 +27,8 @@ fi
 _t_fake_root "$_t_tmp/rel" 8.3.36
 _t_run 'local run reports its own scope' 0 'Ran on this host'  env P2S_TEST_ROOT="$_t_tmp/rel" bash "$_t_script" --no-color
 _t_empty=$(mktemp -d "$_t_tmp/relempty.XXXX")
-_t_run 'no PHP found mentions none running' 0 'none running' env P2S_TEST_ROOT="$_t_empty" bash "$_t_script" --no-color
+# Exit 2 for the same reason as the case above: nothing was judged here.
+_t_run 'no PHP found mentions none running' 2 'none running' env P2S_TEST_ROOT="$_t_empty" bash "$_t_script" --no-color
 
 # PHP in an unusual path is found through the process list, not the path globs.
 _t_proc="$_t_tmp/proc/4242"

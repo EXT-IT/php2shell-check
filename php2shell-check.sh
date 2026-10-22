@@ -16,7 +16,7 @@
 set -u
 export LC_ALL=C
 
-P2S_SCRIPT_VERSION='1.6.0'
+P2S_SCRIPT_VERSION='2.0.0'
 P2S_DATA_DATE='2026-10-22'
 P2S_ADVISORY='GHSA-w8hw-w9fx-j79w'
 P2S_ADVISORY_URL='https://github.com/php/php-src/security/advisories/GHSA-w8hw-w9fx-j79w'
@@ -1135,7 +1135,12 @@ $(_p2s_running_php_paths)
 EOF
     _p2s_check_unqueried_runtimes
     if [ "$_found" -eq 0 ]; then
-        _p2s_add info php-binary 'host' 'no PHP installation found in the usual locations and none running' \
+        # Undecided, not clean: this says the known paths and the process list
+        # hold nothing, which is not the same as "this host runs no PHP". A
+        # build under /opt, a vendor bundle, a launcher under a name this
+        # script does not know — all of them end up here. Until 1.6.0 this was
+        # an info line, info is counted nowhere, and the run came out green.
+        _p2s_add unknown php-binary 'host' 'no PHP installation found in the usual locations and none running, so this run cannot say whether this host serves PHP' \
             'If this host serves PHP from an unusual path, check that path by hand'
     fi
 }
@@ -1655,8 +1660,26 @@ _p2s_check_url() {
                     'Run this script on the server itself: there the package version gives a definite answer' ;;
             *)
                 _verdict=$(_p2s_judge_upstream "$_phpv")
-                case "${_verdict%%|*}" in unknown) _p2s_urls_open=$(( _p2s_urls_open + 1 )) ;; esac
-                _p2s_add_verdict php-banner "$_url" "${_verdict%%|*}|X-Powered-By: $(printf '%s' "$_verdict" | cut -d'|' -f2-)" ;;
+                case "${_verdict%%|*}" in
+                    ok)
+                        # A header that announces a fixed version is not a
+                        # verdict. X-Powered-By is set by whoever configures
+                        # the server: header() in the application, add_header
+                        # in nginx, a cache, or a proxy with a different PHP
+                        # behind it. Until 1.6.0 this branch answered
+                        # "[OK] php-banner" plus "NO VULNERABLE PHP FOUND"
+                        # with exit 0, while the prose in the same output said
+                        # the run cannot confirm a patch level. The prose was
+                        # right and the exit code was wrong, and a pipeline
+                        # reads the exit code. A version BELOW the fix stays a
+                        # finding: if that header lies, it only costs a look.
+                        _p2s_urls_open=$(( _p2s_urls_open + 1 ))
+                        _p2s_add unknown php-banner "$_url" "announces PHP $_phpv, which is patched — but a header is self-declared and can be set by the application, a cache or a proxy, so this does not confirm what runs behind it" \
+                            'Run this script on the server itself: there the package version gives a definite answer' ;;
+                    *)
+                        case "${_verdict%%|*}" in unknown) _p2s_urls_open=$(( _p2s_urls_open + 1 )) ;; esac
+                        _p2s_add_verdict php-banner "$_url" "${_verdict%%|*}|X-Powered-By: $(printf '%s' "$_verdict" | cut -d'|' -f2-)" ;;
+                esac ;;
         esac
         _p2s_add warn disclosure "$_url" "the PHP version is visible to everyone (X-Powered-By: PHP/$_phpv)" \
             'Set expose_php=0 so scanners cannot pick vulnerable targets by header'
@@ -1816,6 +1839,11 @@ fi
 # ---------------------------------------------------------------------------
 
 _n_vuln=0; _n_unknown=0; _n_warn=0; _n_ok=0
+# How many PHP runtimes this run actually judged. Counting statuses alone
+# cannot answer that: a host with no PHP still collects ok lines from the
+# AppArmor and process checks and therefore looks examined. Only the three
+# checks that judge a PHP runtime count, and only when they reached a verdict.
+_n_judged=0
 _i=0
 while [ "$_i" -lt "${#_f_status[@]}" ]; do
     case "${_f_status[$_i]}" in
@@ -1824,10 +1852,22 @@ while [ "$_i" -lt "${#_f_status[@]}" ]; do
         warn) _n_warn=$(( _n_warn + 1 )) ;;
         ok) _n_ok=$(( _n_ok + 1 )) ;;
     esac
+    case "${_f_check[$_i]}" in
+        php-binary|container|php-banner)
+            case "${_f_status[$_i]}" in
+                vuln|unknown|ok) _n_judged=$(( _n_judged + 1 )) ;;
+            esac ;;
+    esac
     _i=$(( _i + 1 ))
 done
+# A run that judged no PHP at all is not a clean run. Until 1.6.0 the lines
+# that say "there was nothing here to look at" were info, info is counted
+# nowhere, and the result came out "NO VULNERABLE PHP FOUND" with exit 0 —
+# measured on a macOS host, where the local checks cannot run in the first
+# place: "0 vulnerable, 0 undecided, 0 warnings, 0 ok", exit 0. Silence is not
+# a verdict.
 if [ "$_n_vuln" -gt 0 ]; then _p2s_result=vulnerable; _p2s_rc=1
-elif [ "$_n_unknown" -gt 0 ]; then _p2s_result=undecided; _p2s_rc=2
+elif [ "$_n_unknown" -gt 0 ] || [ "$_n_judged" -eq 0 ]; then _p2s_result=undecided; _p2s_rc=2
 else _p2s_result=not-vulnerable; _p2s_rc=0
 fi
 
@@ -1852,7 +1892,13 @@ fi
 printf '\n%sSummary%s  %d vulnerable, %d undecided, %d warnings, %d ok\n' "$_c_bold" "$_c_off" "$_n_vuln" "$_n_unknown" "$_n_warn" "$_n_ok"
 case "$_p2s_result" in
     vulnerable)     printf '  %sVULNERABLE%s  at least one PHP runtime needs an update now.\n' "$_c_red" "$_c_off" ;;
-    undecided)      printf '  %sUNDECIDED%s   some results could not be judged, see the ?? lines.\n' "$_c_yel" "$_c_off" ;;
+    undecided)
+        if [ "$_n_judged" -eq 0 ]; then
+            printf '  %sUNDECIDED%s   this run judged no PHP runtime at all, so it says nothing\n' "$_c_yel" "$_c_off"
+            printf '              about this host. See the lines above for what stopped it.\n'
+        else
+            printf '  %sUNDECIDED%s   some results could not be judged, see the ?? lines.\n' "$_c_yel" "$_c_off"
+        fi ;;
     not-vulnerable) printf '  %sNO VULNERABLE PHP FOUND%s  in what this script can see.\n' "$_c_grn" "$_c_off" ;;
 esac
 
