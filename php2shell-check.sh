@@ -172,6 +172,15 @@ fi
 _p2s_root=${P2S_TEST_ROOT:-}
 _p2s_proc=${P2S_PROC_ROOT:-/proc}
 
+# Set only while a binary that lives in another mount namespace is judged, by
+# _p2s_check_ns_binary. _p2s_ns=1 points every lookup at that root's own data
+# and forbids executing anything out of it; _p2s_ns_id is the dedupe identity
+# and _p2s_ns_ver the version that was read without running the binary.
+_p2s_ns=0
+_p2s_ns_id=''
+_p2s_ns_mnt=''
+_p2s_ns_ver=''
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -383,11 +392,27 @@ _p2s_judge_deb_data() {
     fi
 }
 
+# dpkg-query against the package database that belongs to the root under
+# examination. --admindir lets this host's own dpkg-query read a container's
+# /var/lib/dpkg: no exec into the container, no byte of it executed, and it
+# works for every runtime because it is a file read. Judging a container by
+# the HOST's database is the mistake v1.4.0 fixed for the Docker path, and the
+# process fallback can make it just as easily.
+_p2s_dpkg_query() {
+    if [ "$_p2s_ns" -eq 1 ] && [ -d "$_p2s_root/var/lib/dpkg" ]; then
+        dpkg-query --admindir="$_p2s_root/var/lib/dpkg" "$@"
+    else
+        dpkg-query "$@"
+    fi
+}
+
 # The same verdict for a package on this host.
 _p2s_judge_deb() {
     local _pkg=$1 _v=$2 _pv _src _cn
-    _pv=$(dpkg-query -W -f='${Version}' "$_pkg" 2>/dev/null | _p2s_clean 60)
-    _src=$(dpkg-query -W -f='${source:Package}' "$_pkg" 2>/dev/null | _p2s_clean 40)
+    # shellcheck disable=SC2016  # dpkg format string, expanded by dpkg-query
+    _pv=$(_p2s_dpkg_query -W -f='${Version}' "$_pkg" 2>/dev/null | _p2s_clean 60)
+    # shellcheck disable=SC2016  # dpkg format string, expanded by dpkg-query
+    _src=$(_p2s_dpkg_query -W -f='${source:Package}' "$_pkg" 2>/dev/null | _p2s_clean 40)
     _cn=$(_p2s_os_field VERSION_CODENAME)
     _p2s_judge_deb_data "$_cn" "$_src" "$_pv" "$_v" "$_pkg"
 }
@@ -487,6 +512,9 @@ _p2s_clean_lines() { tr -dc 'A-Za-z0-9_.:/=<>() \n-' | head -c 1000; }
 
 _p2s_seen=' '
 _p2s_seen_pkg=' '
+_p2s_runtime_ns=' '
+_p2s_runtime_cmd=0
+_p2s_ns_found=0
 
 _p2s_php_version_of() {   # binary -> x.y.z or empty
     local _b=$1 _v
@@ -512,33 +540,65 @@ _p2s_php_version_of() {   # binary -> x.y.z or empty
 
 # Judge one PHP binary. $2 is a note for the report (how it was found).
 _p2s_check_one_binary() {
-    local _b=$1 _note=${2:-} _real _v _pkg _verdict _dir _sapi
+    local _b=$1 _note=${2:-} _real _v='' _pkg _verdict _dir _sapi _qpath
     [ -f "$_b" ] && [ -x "$_b" ] || return 1
-    _real=$(readlink -f "$_b" 2>/dev/null || echo "$_b")
+    if [ "$_p2s_ns" -eq 1 ]; then
+        # readlink -f would walk through the /proc/<pid>/root magic symlink and
+        # hand back a path read in the HOST namespace, which both collides with
+        # the host's own binaries in the dedupe list and would point the host
+        # package database at the wrong file. The mount namespace id plus the
+        # path inside it is the identity that is true for every worker of that
+        # container and for nothing else.
+        _real=$_p2s_ns_id
+        _v=$_p2s_ns_ver
+    else
+        _real=$(readlink -f "$_b" 2>/dev/null || echo "$_b")
+    fi
     case "$_p2s_seen" in *" $_real "*) return 1 ;; esac
     _p2s_seen="$_p2s_seen$_real "
-    _v=$(_p2s_php_version_of "$_b")
+    [ -n "$_v" ] || _v=$(_p2s_php_version_of "$_b")
     [ -n "$_v" ] || return 1
     # No test-root guard here: a path that no package owns simply yields an
     # empty answer, and that lets the tests put a dpkg-query stub in PATH and
     # exercise the distribution path end to end instead of as a unit only.
     _pkg=''
+    # A foreign root lists its files under the paths they have INSIDE that
+    # root, so the /proc/<pid>/root prefix has to come off before the search.
+    _qpath=$_real
+    [ "$_p2s_ns" -eq 1 ] && _qpath=${_b#"$_p2s_root"}
     if command -v dpkg-query >/dev/null 2>&1; then
-        _pkg=$(dpkg-query -S "$_real" 2>/dev/null | head -n1 | cut -d: -f1)
+        _pkg=$(_p2s_dpkg_query -S "$_qpath" 2>/dev/null | head -n1 | cut -d: -f1)
     fi
     if [ -n "$_pkg" ]; then
         # Debian ships the same cgi build under two paths (/usr/bin/php-cgi8.4
         # and /usr/lib/cgi-bin/php8.4). Same package, same version, same
         # verdict — report it once instead of twice.
-        case "$_p2s_seen_pkg" in *" $_pkg $_v "*) return 0 ;; esac
-        _p2s_seen_pkg="$_p2s_seen_pkg$_pkg $_v "
+        # The mount namespace belongs in the key. php8.3-cli 8.3.6 on the host
+        # and php8.3-cli 8.3.6 in a container are the same name at the same
+        # upstream number and a different patch state, so collapsing them
+        # would hide a vulnerable container behind a patched host, or the
+        # other way round.
+        case "$_p2s_seen_pkg" in *" $_p2s_ns_mnt$_pkg $_v "*) return 0 ;; esac
+        _p2s_seen_pkg="$_p2s_seen_pkg$_p2s_ns_mnt$_pkg $_v "
         _verdict=$(_p2s_judge_deb "$_pkg" "$_v")
-    elif command -v rpm >/dev/null 2>&1 && rpm -qf "$_real" >/dev/null 2>&1; then
+    elif [ "$_p2s_ns" -eq 0 ] && command -v rpm >/dev/null 2>&1 && rpm -qf "$_real" >/dev/null 2>&1; then
         _verdict=$(_p2s_judge_rpm "$_real" "$_v")
     else
+        # An RPM root is deliberately not read through rpm --dbpath: the
+        # database format changed between EL releases (bdb, ndb, sqlite), so
+        # the host's rpm can fail on a container's database in a way that looks
+        # like "no package" instead of like an error. Without a package the
+        # upstream comparison decides, and a version only reaches this point
+        # when it came from the image environment, where it is an upstream
+        # number — see _p2s_ns_php_version.
         _verdict=$(_p2s_judge_upstream "$_v")
     fi
     _p2s_add_verdict php-binary "${_b#"$_p2s_root"}$_note" "$_verdict"
+    # The ini probe below runs the binary with -r. Never do that with a binary
+    # out of a foreign root; _p2s_ns_php_version carries the reasoning. The
+    # runtime configuration of that root therefore stays unchecked, which is
+    # the same limit the README already states for FrankenPHP without a CLI.
+    [ "$_p2s_ns" -eq 1 ] && return 0
     case "$_b" in
         # None of these can run the ini probe: -r belongs to the CLI binary
         # alone. On a Debian layout the CLI binary reads the fpm, apache2 and
@@ -562,23 +622,205 @@ _p2s_check_one_binary() {
 # (/opt/php-8.3, a vendor bundle) is invisible to the path list below, and
 # reporting "no PHP found" on a host that is serving PHP right now is the
 # worst mistake this script could make.
+#
+# The exe link of a containerised process names the path INSIDE that
+# container, and that path does not exist in the host's namespace — so the old
+# "[ -f $_e ]" filter threw away exactly the finds this fallback exists for.
+# Measured on a Docker host on 2026-10-22: php:8.3.35-fpm running as pid
+# 581758, [ -f /usr/local/sbin/php-fpm ] false, [ -f
+# /proc/581758/root/usr/local/sbin/php-fpm ] true, and the whole run said "no
+# PHP installation found" and exited 0. /proc/<pid>/root reaches every runtime
+# that gives its payload its own mount namespace — rootless Docker of another
+# user, containerd/nerdctl, Kubernetes, LXC/LXD, systemd-nspawn, Snap — with
+# one path and without asking any of them.
+#
+# Prints one record per find: "kind|pid|mount-namespace|path". kind is "host"
+# when the process shares our mount namespace and "ns" when it does not.
 _p2s_running_php_paths() {
-    local _p _e
+    local _p _e _ns _self _kind _seen=' '
     [ -z "$_p2s_root" ] || [ -n "${P2S_PROC_ROOT:-}" ] || return 0
     [ -d "$_p2s_proc" ] || return 0
+    _self=$(readlink "$_p2s_proc/self/ns/mnt" 2>/dev/null | tr -dc '0-9a-z:[]')
     for _p in "$_p2s_proc"/[0-9]*; do
         _e=$(readlink "$_p/exe" 2>/dev/null) || continue
         _e=${_e% (deleted)}
         case "$_e" in
             */php|*/php[0-9]*|*/php-fpm|*/php-fpm[0-9]*|*/lsphp|*/lsphp[0-9]* \
-            |*/php-cgi|*/php-cgi[0-9]*|*/cgi-bin/php*|*/frankenphp)
-                [ -f "$_e" ] && printf '%s\n' "$_e" ;;
+            |*/php-cgi|*/php-cgi[0-9]*|*/cgi-bin/php*|*/frankenphp) ;;
+            *) continue ;;
         esac
+        # The namespace, not the file test, decides whose binary this is: an
+        # LXC container with /usr/bin/php8.3 on a host that also has
+        # /usr/bin/php8.3 would otherwise be judged by the host's package and
+        # then silently dropped by the dedupe list.
+        _ns=$(readlink "$_p/ns/mnt" 2>/dev/null | tr -dc '0-9a-z:[]')
+        if [ "$_ns" = "$_self" ]; then _kind=host; else _kind=ns; fi
+        # One line per (namespace, path): a busy FPM pool has dozens of
+        # workers on the same binary and they are one installation.
+        case "$_seen" in *" $_kind$_ns$_e "*) continue ;; esac
+        _seen="$_seen $_kind$_ns$_e "
+        printf '%s|%s|%s|%s\n' "$_kind" "${_p##*/}" "$_ns" "$_e"
     done | sort -u
 }
 
+# The PHP version of a binary in another mount namespace, read from data and
+# never by running it.
+#
+# Running it is the obvious shortcut and measurably tempting: on the Docker
+# host of 2026-10-22 /proc/581758/root/usr/local/sbin/php-fpm -v did answer
+# "PHP 8.3.35 (fpm-fcgi)". It is still the wrong thing to do here, for two
+# reasons that each stand on their own.
+#
+# It would be foreign code as root. That binary comes out of an image somebody
+# else built, and starting it from the host starts it OUTSIDE the container's
+# namespaces, cgroups, seccomp filter and AppArmor profile, with full host
+# privileges. A tool whose whole promise is "changes nothing, starts nothing"
+# must not be the thing that lifts a container payload onto the host. For the
+# host's own binaries the trade-off is a different one and the script keeps
+# using -v there: those are already running as themselves.
+#
+# And the answer would not be trustworthy either. The ELF interpreter and
+# every library path in that binary are absolute and resolve against the HOST
+# root, not the container's: a musl image on a glibc host fails outright, and
+# a glibc image of another vintage links against the host's libraries, so what
+# it prints is not necessarily what the container runs.
+#
+# Three sources answer without execution, in this order:
+#   1. the container's own dpkg database, which the Debian/Ubuntu verdict needs
+#      anyway — a backported 8.3.6 can only be decided from the package version
+#   2. PHP_VERSION in the process environment, which the official php,
+#      wordpress and FrankenPHP images set in the image; the container check
+#      already judges stopped containers from exactly this value
+#   3. main/php_version.h of a source build, which those images ship with
+#      their headers
+# Nothing found means the verdict says so, see _p2s_check_ns_binary.
+_p2s_ns_php_version() {   # process-dir root-prefix path-inside-that-root
+    local _pd=$1 _r=$2 _e=$3 _v='' _pkg _pv _h
+    if command -v dpkg-query >/dev/null 2>&1 && [ -r "$_r/var/lib/dpkg/status" ]; then
+        _pkg=$(_p2s_dpkg_query -S "$_e" 2>/dev/null | head -n1 | cut -d: -f1 | _p2s_clean 60)
+        if [ -n "$_pkg" ]; then
+            # shellcheck disable=SC2016  # dpkg format string, expanded by dpkg-query
+            _pv=$(_p2s_dpkg_query -W -f='${Version}' "$_pkg" 2>/dev/null | _p2s_clean 60)
+            _v=${_pv#*:}; _v=${_v%%[-+~]*}
+        fi
+    fi
+    if ! _p2s_is_version "$_v" && [ -r "$_pd/environ" ]; then
+        _v=$(tr '\0' '\n' < "$_pd/environ" 2>/dev/null \
+             | awk -F= '$1=="PHP_VERSION"{print $2;exit}' | _p2s_clean 30)
+        _v=${_v%%[-+~]*}
+    fi
+    if ! _p2s_is_version "$_v"; then
+        for _h in "$_r"/usr/local/include/php/main/php_version.h \
+                  "$_r"/usr/include/php/main/php_version.h; do
+            [ -r "$_h" ] || continue
+            _v=$(grep -E '^#define PHP_VERSION ' "$_h" 2>/dev/null | head -n1 | tr -dc '0-9.')
+            _p2s_is_version "$_v" && break
+        done
+    fi
+    _p2s_is_version "$_v" && printf '%s' "$_v"
+}
+
+# Judge a PHP binary that runs in another mount namespace. Everything the
+# verdict needs comes out of THAT root: /etc/os-release for the codename,
+# /var/lib/dpkg for the package version, its own php.ini paths. Reusing
+# _p2s_root as the prefix is what makes that free — it is already the "look
+# below this tree instead of /" switch that P2S_TEST_ROOT uses, and every
+# verdict function already reads through it.
+_p2s_check_ns_binary() {   # pid mount-namespace path-inside-that-root
+    local _pid=$1 _nsid=$2 _e=$3 _hit=1
+    local _o_root=$_p2s_root _o_ns=$_p2s_ns _o_id=$_p2s_ns_id _o_ver=$_p2s_ns_ver
+    local _o_mnt=$_p2s_ns_mnt
+    _p2s_root="$_p2s_proc/$_pid/root"
+    _p2s_ns=1
+    # No namespace id readable (an unprivileged run) means the pid has to
+    # stand in for it: two such finds must not be mistaken for one, and
+    # neither must one of them be mistaken for a host path.
+    _p2s_ns_mnt="${_nsid:-pid$_pid}:"
+    _p2s_ns_id="$_p2s_ns_mnt$_e"
+    _p2s_ns_ver=$(_p2s_ns_php_version "$_p2s_proc/$_pid" "$_p2s_root" "$_e")
+    if [ -n "$_p2s_ns_ver" ]; then
+        _p2s_check_one_binary "$_p2s_root$_e" \
+            " (running in a container or other mount namespace, pid $_pid)" || _hit=0
+    else
+        case "$_p2s_seen" in
+            *" $_p2s_ns_id "*) _hit=0 ;;
+            *)
+                _p2s_seen="$_p2s_seen$_p2s_ns_id "
+                _p2s_add unknown php-binary "$_e (running in a container or other mount namespace, pid $_pid)" \
+                    'PHP serves requests here, but its version is in neither the package database nor the image environment of that root, and this script does not run a binary out of a foreign root as root on the host' \
+                    'Ask it from inside: docker/podman/nerdctl exec <container> php -v, kubectl exec, or lxc-attach' ;;
+        esac
+    fi
+    _p2s_root=$_o_root; _p2s_ns=$_o_ns; _p2s_ns_id=$_o_id; _p2s_ns_ver=$_o_ver
+    _p2s_ns_mnt=$_o_mnt
+    [ "$_hit" -eq 1 ]
+}
+
+# Mount namespaces that the Docker/Podman check below covers anyway. That
+# check has more to say about them (runtime configuration, SAPI, container
+# log), so it wins and the process fallback stays quiet about those
+# namespaces — otherwise the same container PHP appears twice in the report.
+# Two read-only queries per runtime, and the namespace id itself is read from
+# /proc, not from the runtime.
+_p2s_collect_runtime_ns() {
+    local _rt _ids _pid _ns
+    [ "$_opt_containers" -eq 1 ] || return 0
+    [ -z "$_p2s_root" ] || return 0
+    for _rt in docker podman; do
+        command -v "$_rt" >/dev/null 2>&1 || continue
+        _p2s_runtime_cmd=1
+        _ids=$(_p2s_timeout 10 "$_rt" ps -q 2>/dev/null | tr -dc '0-9a-f \n') || continue
+        [ -n "$_ids" ] || continue
+        # One inspect for the whole list, not one per container: a host with
+        # fifty containers would otherwise pay fifty process starts before the
+        # first line of the report.
+        # shellcheck disable=SC2086  # deliberate split, the ids are hex words
+        for _pid in $(_p2s_timeout 15 "$_rt" inspect -f '{{.State.Pid}}' $_ids 2>/dev/null | tr -dc '0-9 \n'); do
+            [ -n "$_pid" ] && [ "$_pid" != 0 ] || continue
+            _ns=$(readlink "$_p2s_proc/$_pid/ns/mnt" 2>/dev/null | tr -dc '0-9a-z:[]')
+            [ -n "$_ns" ] && _p2s_runtime_ns="$_p2s_runtime_ns$_ns "
+        done
+    done
+}
+
+# A container runtime is running, nothing could be asked about its containers,
+# and no PHP turned up in them either. Saying nothing here is how a green run
+# over an unpatched PHP happens — the shape of the 2026-10-22 measurement — so
+# this says "I do not know" and costs exit code 2.
+#
+# Only when no docker or podman command exists at all: where one does,
+# _p2s_check_containers reports its own failure to list, and a second line
+# about the same gap would just be noise. --no-containers is not covered
+# either, because that gap is the caller's own decision.
+_p2s_check_unqueried_runtimes() {
+    local _p _e _n _rt=''
+    [ "$_opt_containers" -eq 1 ] || return 0
+    [ "$_p2s_runtime_cmd" -eq 0 ] || return 0
+    [ "$_p2s_ns_found" -eq 0 ] || return 0
+    [ -z "$_p2s_root" ] || [ -n "${P2S_PROC_ROOT:-}" ] || return 0
+    [ -d "$_p2s_proc" ] || return 0
+    for _p in "$_p2s_proc"/[0-9]*; do
+        _e=$(readlink "$_p/exe" 2>/dev/null) || continue
+        _n=${_e##*/}; _n=${_n% (deleted)}
+        case "$_n" in
+            containerd-shim*) _rt='containerd (nerdctl, Kubernetes)' ;;
+            conmon)           _rt='CRI-O or Podman (conmon)' ;;
+            crio)             _rt='CRI-O' ;;
+            lxc-start)        _rt='LXC or LXD' ;;
+            systemd-nspawn)   _rt='systemd-nspawn' ;;
+            *) continue ;;
+        esac
+        break
+    done
+    [ -n "$_rt" ] || return 0
+    _p2s_add unknown container "$_rt" \
+        "a $_rt container is running and there is no docker or podman command here to ask about it; no PHP was visible in its mount namespace either, so this says nothing about the PHP inside it" \
+        'Run this script inside the container, or ask its runtime: nerdctl/crictl ps, kubectl exec, lxc-attach'
+}
+
 _p2s_check_binaries() {
-    local _b _found=0
+    local _b _found=0 _rk _rp _rn _rb
+    _p2s_collect_runtime_ns
     _p2s_section 'PHP installations on this host'
     for _b in "$_p2s_root"/usr/bin/php "$_p2s_root"/usr/bin/php[0-9]* \
               "$_p2s_root"/usr/sbin/php-fpm* "$_p2s_root"/usr/local/bin/php \
@@ -591,10 +833,23 @@ _p2s_check_binaries() {
               "$_p2s_root"/usr/local/lsws/lsphp*/bin/php; do
         _p2s_check_one_binary "$_b" && _found=1
     done
-    # Second pass: whatever is actually running, wherever it lives.
-    for _b in $(_p2s_running_php_paths); do
-        _p2s_check_one_binary "$_b" ' (found via a running process)' && _found=1
-    done
+    # Second pass: whatever is actually running, wherever it lives — in this
+    # root or in another one.
+    while IFS='|' read -r _rk _rp _rn _rb; do
+        [ -n "$_rb" ] || continue
+        if [ "$_rk" = host ] && [ -f "$_rb" ]; then
+            _p2s_check_one_binary "$_rb" ' (found via a running process)' && _found=1
+        elif [ -f "$_p2s_proc/$_rp/root$_rb" ]; then
+            # Not when the Docker/Podman check covers that namespace anyway.
+            case "$_p2s_runtime_ns" in *" $_rn "*) continue ;; esac
+            if _p2s_check_ns_binary "$_rp" "$_rn" "$_rb"; then
+                _found=1; _p2s_ns_found=1
+            fi
+        fi
+    done <<EOF
+$(_p2s_running_php_paths)
+EOF
+    _p2s_check_unqueried_runtimes
     if [ "$_found" -eq 0 ]; then
         _p2s_add info php-binary 'host' 'no PHP installation found in the usual locations and none running' \
             'If this host serves PHP from an unusual path, check that path by hand'

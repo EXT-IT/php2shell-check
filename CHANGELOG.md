@@ -8,6 +8,54 @@ Changes to the vulnerability data (fixed versions, distribution packages) are
 listed separately from code changes, because they change verdicts without
 changing behaviour.
 
+## [Unreleased]
+
+### Fixed
+
+- A PHP that runs in a container was invisible to the process fallback, and
+  that fallback is the last line against a "no PHP found" on a host that is
+  serving PHP right now. `readlink /proc/<pid>/exe` returns the path inside
+  the container, the old `[ -f "$path" ]` test fails in the host namespace, and
+  the find was thrown away. Measured on a Docker host on 2026-10-22:
+  `php:8.3.35-fpm` serving as pid 581758, `php2shell-check.sh --no-containers`
+  answered "no PHP installation found in the usual locations and none running"
+  and exited 0. The binary is now read through `/proc/<pid>/root`, which
+  reaches every runtime that gives its payload a mount namespace — rootless
+  Docker of another user, containerd and nerdctl, Kubernetes, LXC and LXD,
+  systemd-nspawn, Snap, a chroot — with one path and without asking any of
+  them. The report marks such a find as coming from another mount namespace.
+- The verdict for such a find is built from that root's own data: its
+  `/etc/os-release` for the codename and its `/var/lib/dpkg` for the package
+  version, read with the host's `dpkg-query --admindir`. Judging a container by
+  the host's package database is the mistake 1.4.0 fixed for the Docker path,
+  and the process fallback could make it just as easily.
+- Which process belongs to the host and which to a container is decided by the
+  mount namespace, not by a file test. An LXC container with `/usr/bin/php8.3`
+  on a host that also has `/usr/bin/php8.3` was otherwise judged by the host's
+  package and then dropped by the dedupe list.
+
+### Added
+
+- A container runtime that is running while no `docker` or `podman` command
+  exists to ask about it (`containerd-shim*`, `conmon`, `crio`, `lxc-start`,
+  `systemd-nspawn`) gets an *undecided* line of its own instead of silence —
+  but only when no PHP turned up in those namespaces either.
+
+### Security
+
+- Nothing out of a foreign root is executed. The version of a containerised
+  PHP is read from data only: the container's package database, `PHP_VERSION`
+  in the process environment (which the official `php`, `wordpress` and
+  FrankenPHP images set), or `main/php_version.h` of a source build. Running
+  the container's own binary would have been one line shorter and did answer
+  on the measured host, but it means starting someone else's image payload as
+  root *outside* that container's namespaces, cgroups, seccomp filter and
+  AppArmor profile — and the answer would not even be trustworthy, because the
+  ELF interpreter and library paths in that binary resolve against the host
+  root. Where no version can be read, the line is *undecided*. The
+  `mitigation` check, which needs `php -r`, is therefore skipped for these
+  finds; the README states that limit.
+
 ## [1.6.0] - 2026-10-22
 
 Built from two measured runs on a test host: an Ubuntu 26.04 matrix (mod_php

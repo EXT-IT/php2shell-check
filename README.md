@@ -152,11 +152,24 @@ Read this section even if you skip the rest.
 Podman goes through the same code path as Docker, but has only been verified
 against Docker.
 
-A green result covers what the script can see. PHP in a chroot, a
-FreeBSD jail, a VM on the same host or an appliance with a web interface stays
-invisible. The heise article lists pfSense, OPNsense, Synology, QNAP, Citrix,
-Ivanti and F5 BIG-IP among the products that embed PHP, and none of them can
-run this script. Check them with their vendors.
+**A container no runtime answers for is found, but judged less deeply.** Where
+no Docker or Podman command can be asked — rootless Docker belonging to another
+user, containerd or nerdctl, Kubernetes, LXC and LXD, systemd-nspawn, Snap, a
+chroot, or simply a run with `--no-containers` — the running process is read
+through `/proc/<pid>/root` instead. The verdict then comes from that root's own
+`/etc/os-release` and package database, which is what a version and a patch
+state need. What it does not get is the runtime configuration: the `mitigation`
+check has to run `php -r`, and this script does not start a binary out of a
+foreign root as root on the host. Where no version can be read from data at
+all, the line is *undecided* — never clean. And where a container runtime is
+running that nothing could be asked about, that is its own *undecided* line
+rather than silence.
+
+A green result covers what the script can see. A FreeBSD jail, a VM on the
+same host or an appliance with a web interface stays invisible. The heise
+article lists pfSense, OPNsense, Synology, QNAP, Citrix, Ivanti and F5 BIG-IP
+among the products that embed PHP, and none of them can run this script. Check
+them with their vendors.
 
 The fix table goes stale. Distributions publish fixes over days. The
 script knows the packages that existed on 2026-10-21:
