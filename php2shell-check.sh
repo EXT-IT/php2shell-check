@@ -16,8 +16,8 @@
 set -u
 export LC_ALL=C
 
-P2S_SCRIPT_VERSION='1.5.0'
-P2S_DATA_DATE='2026-10-21'
+P2S_SCRIPT_VERSION='1.6.0'
+P2S_DATA_DATE='2026-10-22'
 P2S_ADVISORY='GHSA-w8hw-w9fx-j79w'
 P2S_ADVISORY_URL='https://github.com/php/php-src/security/advisories/GHSA-w8hw-w9fx-j79w'
 P2S_REPO_URL='https://github.com/EXT-IT/php2shell-check'
@@ -49,15 +49,24 @@ _p2s_distro_fixed() {
         jammy:php8.1)    echo '8.1.2-1ubuntu2.28' ;;        # Ubuntu 22.04
         noble:php8.3)    echo '8.3.6-0ubuntu0.24.04.13' ;;  # Ubuntu 24.04
         resolute:php8.5) echo '8.5.4-0ubuntu1.5' ;;         # Ubuntu 26.04
+        stonking:php8.5) echo '8.5.9-0ubuntu2.1' ;;         # Ubuntu 26.10
         trixie:php8.4)   echo '8.4.27-1~deb13u1' ;;         # Debian 13, DSA-6574-1
         bookworm:php8.2) echo '8.2.35-1~deb12u1' ;;         # Debian 12, DLA-4848-1
+        # Ubuntu releases past standard support. These fixes ship through ESM,
+        # so they exist only on a host with Ubuntu Pro attached. Without it the
+        # package stays below the version named here and the verdict is vuln,
+        # which is the truthful answer for that host.
+        focal:php7.4)    echo '7.4.3-4ubuntu2.29+esm5' ;;          # 20.04 ESM
+        bionic:php7.2)   echo '7.2.24-0ubuntu0.18.04.17+esm14' ;;  # 18.04 ESM
+        xenial:php7.0)   echo '7.0.33-0ubuntu0.16.04.16+esm22' ;;  # 16.04 ESM
+        trusty:php5)     echo '5.5.9+dfsg-1ubuntu4.29+esm18' ;;    # 14.04 ESM
         *)               echo none ;;
     esac
 }
 
 # Upstream numbers that distributions freeze. A remote banner showing one of
 # these may belong to a patched backport build, so it cannot be judged.
-_p2s_frozen_versions=' 7.4.3 7.4.33 8.1.2 8.3.6 8.5.4 '
+_p2s_frozen_versions=' 5.5.9 7.0.33 7.2.24 7.4.3 7.4.33 8.1.2 8.3.6 8.5.4 8.5.9 '
 
 # Cloudflare edge ranges, https://www.cloudflare.com/ips/ (2026-10-21).
 _p2s_cf_v4='173.245.48.0/20 103.21.244.0/22 103.22.200.0/22 103.31.4.0/22
@@ -383,18 +392,41 @@ _p2s_judge_deb() {
     _p2s_judge_deb_data "$_cn" "$_src" "$_pv" "$_v" "$_pkg"
 }
 
+# An RPM distribution backports the fix at an unchanged upstream number, like
+# Debian does — but the deciding part is the release, and every rebuilder sets
+# that scheme differently, so a version table cannot be kept correct. The
+# changelog of the installed package can: it names the CVE.
+#
+# Measured on AlmaLinux 9.8 on 2026-10-22, all three with a changelog entry of
+# 2026-10-21 naming both CVE IDs:
+#   php-cli-8.0.30-8.el9_8.alma.1                      (branch 8.0, no upstream fix at all)
+#   php-cli-8.1.32-1.module_el9.8.0+326+528679fc.alma.1 (branch 8.1, likewise)
+#   php-cli-8.3.33-1.module_el9.8.0+328+1fdeb728.alma.1 (8.3.33, below the upstream 8.3.36)
+# The reverse does not hold, which is why a missing entry decides nothing
+# here: the 8.3.36 and 8.2.35 rebases carry the fix through their version and
+# never mention a CVE. The plain RHEL build php-cli-8.0.30-8.el9_8 and every
+# php-cli in Rocky 9.8 carried no such entry on that day.
+_p2s_rpm_changelog_fixed() {   # package name -> 0 when its changelog names a CVE
+    [ -n "$1" ] || return 1
+    _p2s_timeout 5 rpm -q --changelog "$1" 2>/dev/null \
+        | grep -qF -e 'CVE-2026-109618' -e 'CVE-2026-109619'
+}
+
 # Verdict for an RPM package. Prints "status|detail|hint".
 _p2s_judge_rpm() {
-    local _file=$1 _v=$2 _pkg _vendor _fixed
+    local _file=$1 _v=$2 _pkg _name _vendor _fixed
     _pkg=$(rpm -qf --qf '%{NAME}-%{VERSION}-%{RELEASE}' "$_file" 2>/dev/null | head -n1 | _p2s_clean 80)
+    _name=$(rpm -qf --qf '%{NAME}' "$_file" 2>/dev/null | head -n1 | _p2s_clean 60)
     _vendor=$(rpm -qf --qf '%{VENDOR}' "$_file" 2>/dev/null | head -n1 | _p2s_clean 60)
     _fixed=$(_p2s_upstream_fixed "${_v%.*}")
     if [ "$_fixed" != none ] && [ "$_fixed" != unknown ] && _p2s_ver_ge "$_v" "$_fixed"; then
         echo "ok|package $_pkg|"
+    elif _p2s_rpm_changelog_fixed "$_name"; then
+        echo "ok|package $_pkg, its changelog names the CVE: a backport at an unchanged upstream number|"
     elif printf '%s' "$_vendor" | grep -qi remi; then
         echo "vuln|package $_pkg (Remi ships upstream versions)|dnf upgrade 'php*' and restart PHP-FPM / the web server"
     else
-        echo "unknown|package $_pkg ($_vendor), RPM distributions may backport the fix|dnf upgrade, then compare with the vendor's advisory for CVE-2026-109618"
+        echo "unknown|package $_pkg ($_vendor), PHP $_v is below the upstream fix and the package changelog does not name the CVE|dnf upgrade, then compare with the vendor's advisory for CVE-2026-109618"
     fi
 }
 
@@ -454,11 +486,24 @@ _p2s_clean_lines() { tr -dc 'A-Za-z0-9_.:/=<>() \n-' | head -c 1000; }
 # ---------------------------------------------------------------------------
 
 _p2s_seen=' '
+_p2s_seen_pkg=' '
 
 _p2s_php_version_of() {   # binary -> x.y.z or empty
     local _b=$1 _v
     case "$_b" in
-        *php-fpm*|*lsphp*) _v=$(_p2s_timeout 5 "$_b" -v 2>/dev/null | head -n1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1) ;;
+        *frankenphp*)
+            # FrankenPHP links PHP into its own binary and answers with
+            # "FrankenPHP v1.13.2 PHP 8.5.12 Caddy v2.11.7 h1:...". The first
+            # version in that line is FrankenPHP's own, so anchor on "PHP ".
+            # "frankenphp php-cli -v" is no alternative: below PHP 8.6 it
+            # answers "this functionality is not available".
+            _v=$(_p2s_timeout 5 "$_b" version 2>/dev/null | head -n1 \
+                 | grep -oE 'PHP [0-9]+\.[0-9]+\.[0-9]+' | head -n1)
+            _v=${_v#PHP } ;;
+        *php-fpm*|*lsphp*|*php-cgi*|*/cgi-bin/php*)
+            # php-cgi rejects -r ("option not found r") and prints a usage
+            # block instead of a version, so -v is the only probe these share.
+            _v=$(_p2s_timeout 5 "$_b" -v 2>/dev/null | head -n1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1) ;;
         *)                 _v=$(_p2s_timeout 5 "$_b" -r 'echo PHP_VERSION;' 2>/dev/null | head -n1 | _p2s_clean 30) ;;
     esac
     _v=${_v%%[-+~]*}
@@ -482,6 +527,11 @@ _p2s_check_one_binary() {
         _pkg=$(dpkg-query -S "$_real" 2>/dev/null | head -n1 | cut -d: -f1)
     fi
     if [ -n "$_pkg" ]; then
+        # Debian ships the same cgi build under two paths (/usr/bin/php-cgi8.4
+        # and /usr/lib/cgi-bin/php8.4). Same package, same version, same
+        # verdict — report it once instead of twice.
+        case "$_p2s_seen_pkg" in *" $_pkg $_v "*) return 0 ;; esac
+        _p2s_seen_pkg="$_p2s_seen_pkg$_pkg $_v "
         _verdict=$(_p2s_judge_deb "$_pkg" "$_v")
     elif command -v rpm >/dev/null 2>&1 && rpm -qf "$_real" >/dev/null 2>&1; then
         _verdict=$(_p2s_judge_rpm "$_real" "$_v")
@@ -490,7 +540,11 @@ _p2s_check_one_binary() {
     fi
     _p2s_add_verdict php-binary "${_b#"$_p2s_root"}$_note" "$_verdict"
     case "$_b" in
-        *php-fpm*|*lsphp*) ;;
+        # None of these can run the ini probe: -r belongs to the CLI binary
+        # alone. On a Debian layout the CLI binary reads the fpm, apache2 and
+        # cgi php.ini below anyway; a FrankenPHP host without a php CLI keeps
+        # its runtime configuration unchecked, which README states.
+        *php-fpm*|*lsphp*|*php-cgi*|*/cgi-bin/php*|*frankenphp*) ;;
         *)
             _p2s_check_ini "${_b#"$_p2s_root"} (CLI)" "$_b"
             # Debian layout: evaluate the FPM / Apache php.ini with this binary.
@@ -516,7 +570,8 @@ _p2s_running_php_paths() {
         _e=$(readlink "$_p/exe" 2>/dev/null) || continue
         _e=${_e% (deleted)}
         case "$_e" in
-            */php|*/php[0-9]*|*/php-fpm|*/php-fpm[0-9]*|*/lsphp|*/lsphp[0-9]*)
+            */php|*/php[0-9]*|*/php-fpm|*/php-fpm[0-9]*|*/lsphp|*/lsphp[0-9]* \
+            |*/php-cgi|*/php-cgi[0-9]*|*/cgi-bin/php*|*/frankenphp)
                 [ -f "$_e" ] && printf '%s\n' "$_e" ;;
         esac
     done | sort -u
@@ -528,6 +583,9 @@ _p2s_check_binaries() {
     for _b in "$_p2s_root"/usr/bin/php "$_p2s_root"/usr/bin/php[0-9]* \
               "$_p2s_root"/usr/sbin/php-fpm* "$_p2s_root"/usr/local/bin/php \
               "$_p2s_root"/usr/local/sbin/php-fpm "$_p2s_root"/usr/bin/lsphp* \
+              "$_p2s_root"/usr/bin/php-cgi "$_p2s_root"/usr/bin/php-cgi[0-9]* \
+              "$_p2s_root"/usr/lib/cgi-bin/php* "$_p2s_root"/usr/local/bin/php-cgi \
+              "$_p2s_root"/usr/bin/frankenphp "$_p2s_root"/usr/local/bin/frankenphp \
               "$_p2s_root"/opt/plesk/php/*/bin/php "$_p2s_root"/opt/cpanel/ea-php*/root/usr/bin/php \
               "$_p2s_root"/opt/alt/php*/usr/bin/php "$_p2s_root"/opt/remi/php*/root/usr/bin/php \
               "$_p2s_root"/usr/local/lsws/lsphp*/bin/php; do
@@ -568,47 +626,82 @@ _p2s_check_fpm_pools() {
     done
 }
 
-# Which SAPI serves requests. The advisory is explicit: mod_php is where a
-# complete unauthenticated exploit was demonstrated, for PHP-FPM none was,
-# and FrankenPHP and LSAPI are suspected but unvalidated. That is the whole
-# difference between "patch tonight" and "patch in the window".
+# Which SAPI serves requests. How much the version number means depends on
+# it: GHSA-6wmf-4rv5-p3rp validated the session lifecycle RCE "against mod_php
+# and FPM", so both are demonstrated, and only the startup sequence of the
+# first CVE is limited by FPM exiting the child. php.net names php-cgi and
+# FrankenPHP under "Who is at risk" without validating either.
 _p2s_sapi_note() {   # $1 = sapi, $2 = where
     case "$1" in
         mod_php)    _p2s_add warn sapi "$2" 'served by mod_php: the advisory demonstrates a complete unauthenticated exploit against exactly this setup' \
                         'Treat a vulnerable PHP behind mod_php as the most urgent case' ;;
-        fpm)        _p2s_add info sapi "$2" 'served by PHP-FPM: the advisory reports no complete exploit for FPM, the worker exits on the failed startup. Patch anyway, this is not a fix' ;;
+        fpm)        _p2s_add warn sapi "$2" 'served by PHP-FPM: the advisory validated the session lifecycle RCE against mod_php and FPM alike. FPM exits the child after a failed request startup, which blocks that one sequence, not the bug' \
+                        'Treat a vulnerable PHP behind FPM as urgent too, the worker exit is no fix' ;;
+        cgi)        _p2s_add warn sapi "$2" 'served by php-cgi: php.net names it under "Who is at risk", the advisories validate no exploit against it' \
+                        'A FastCGI process serves many requests, so judge this like FPM, not like one process per request' ;;
         litespeed)  _p2s_add info sapi "$2" 'served by LiteSpeed/LSAPI: named as affected in the advisory, not validated there' ;;
-        frankenphp) _p2s_add unknown sapi "$2" 'FrankenPHP: the advisory calls it probably affected from source review, without validation' ;;
+        frankenphp) _p2s_add unknown sapi "$2" 'FrankenPHP: the advisory found no equivalent early configuration consumer in its default configuration, and says explicitly that this does not make it immune' ;;
     esac
 }
 
+# Several at once is the normal case, not the exception: a Plesk host carries
+# mod_php and FPM, a Debian host FPM and php-cgi. Reporting only the first
+# find hid exactly the combination that decides the urgency.
+_p2s_sapi_seen() {   # appends $1 to the caller's _found, once
+    case " $_found " in *" $1 "*) return 0 ;; esac
+    _found="$_found $1"
+}
+
 _p2s_check_sapi() {
-    local _f _found=''
+    local _f _found='' _s
     for _f in "$_p2s_root"/etc/apache2/mods-enabled/php*.load \
               "$_p2s_root"/etc/httpd/conf.modules.d/*php*.conf \
               "$_p2s_root"/usr/local/lib/apache2/modules/libphp*.so \
               "$_p2s_root"/usr/lib/apache2/modules/libphp*.so; do
         [ -e "$_f" ] || continue
-        _found=mod_php; break
+        _p2s_sapi_seen mod_php; break
     done
+    for _f in "$_p2s_root"/etc/php/*/fpm/php-fpm.conf "$_p2s_root"/etc/php-fpm.conf \
+              "$_p2s_root"/usr/local/etc/php-fpm.conf; do
+        [ -e "$_f" ] || continue
+        _p2s_sapi_seen fpm; break
+    done
+    # The binary alone proves nothing: on RHEL and AlmaLinux the php-cli
+    # package itself installs /usr/bin/php-cgi, so a host with nothing but the
+    # command line interpreter claimed to be served through CGI. Evidence is
+    # the SAPI's own php.ini (Debian's php*-cgi package) or the cgi-bin wiring
+    # of the web server.
+    for _f in "$_p2s_root"/etc/php/*/cgi/php.ini "$_p2s_root"/usr/lib/cgi-bin/php* \
+              "$_p2s_root"/var/www/cgi-bin/php*; do
+        [ -e "$_f" ] || continue
+        _p2s_sapi_seen cgi; break
+    done
+    [ -e "$_p2s_root/usr/local/lsws" ] && _p2s_sapi_seen litespeed
+    for _f in "$_p2s_root"/usr/local/bin/frankenphp "$_p2s_root"/usr/bin/frankenphp; do
+        [ -e "$_f" ] || continue
+        _p2s_sapi_seen frankenphp; break
+    done
+    if [ -z "$_p2s_root" ] && command -v frankenphp >/dev/null 2>&1; then
+        _p2s_sapi_seen frankenphp
+    fi
+    # Silence is the one answer this script never gives. A host that has PHP
+    # but matches none of the patterns above gets told so, because the whole
+    # urgency judgement hangs on this section.
     if [ -z "$_found" ]; then
-        for _f in "$_p2s_root"/etc/php/*/fpm/php-fpm.conf "$_p2s_root"/etc/php-fpm.conf \
-                  "$_p2s_root"/usr/local/etc/php-fpm.conf; do
-            [ -e "$_f" ] || continue
-            _found=fpm; break
-        done
+        [ "$_p2s_seen" = ' ' ] && return 0
+        _p2s_section 'How PHP is served'
+        _p2s_add info sapi 'host' 'cannot tell how PHP is served: no mod_php module, PHP-FPM config, php-cgi, LiteSpeed or FrankenPHP found. A PHP that only runs on the command line is not reachable through this bug' \
+            'If this host does serve web requests, judge it by the most urgent case, mod_php'
+        return 0
     fi
-    [ -z "$_found" ] && [ -e "$_p2s_root/usr/local/lsws" ] && _found=litespeed
-    if [ -z "$_found" ] && [ -z "$_p2s_root" ] && command -v frankenphp >/dev/null 2>&1; then
-        _found=frankenphp
-    fi
-    [ -n "$_found" ] || return 0
     _p2s_section 'How PHP is served'
-    _p2s_sapi_note "$_found" 'host'
+    for _s in $_found; do
+        _p2s_sapi_note "$_s" 'host'
+    done
 }
 
 _p2s_check_containers() {
-    local _rt _names _c _v _img _verdict _fpm _cdeb _ccn _cini _csapi _cpkg _csrc _crest _cver
+    local _rt _names _c _v _img _verdict _fpm _cdeb _ccn _cini _csapi _cpkg _csrc _crest _cver _cphp
     for _rt in docker podman; do
         command -v "$_rt" >/dev/null 2>&1 || continue
         if ! _names=$(_p2s_timeout 10 "$_rt" ps --format '{{.Names}}' 2>/dev/null); then
@@ -622,7 +715,17 @@ _p2s_check_containers() {
             _c=$(printf '%s' "$_c" | _p2s_clean 80)
             _v=$(_p2s_timeout 5 "$_rt" exec "$_c" php -r 'echo PHP_VERSION;' 2>/dev/null | head -n1 | _p2s_clean 30)
             _v=${_v%%[-+~]*}
-            # Containers without php answer with an error text here, not a version.
+            _cphp=1
+            # Containers without php answer with an error text here, not a
+            # version. A FrankenPHP image built without a php CLI is such a
+            # container and still serves PHP, so ask its own binary; the PHP
+            # version is the second one in that line, after FrankenPHP's own.
+            if ! _p2s_is_version "$_v"; then
+                _cphp=0
+                _v=$(_p2s_timeout 5 "$_rt" exec "$_c" frankenphp version 2>/dev/null | head -n1 \
+                     | grep -oE 'PHP [0-9]+\.[0-9]+\.[0-9]+' | head -n1)
+                _v=${_v#PHP }
+            fi
             _p2s_is_version "$_v" || continue
             _found_ct=1
             _img=$("$_rt" inspect -f '{{.Config.Image}}' "$_c" 2>/dev/null | _p2s_clean 120)
@@ -653,14 +756,19 @@ _p2s_check_containers() {
                 _verdict=$(_p2s_judge_upstream "$_v")
             fi
             _p2s_add_verdict container "$_c ($_img)" "$_verdict"
-            _p2s_check_ini "$_c (CLI)" "$_rt" exec "$_c" php
-            # Debian layout inside the container: the SAPI that serves
-            # requests has its own php.ini, and that is the one that counts.
-            for _cini in $(_p2s_timeout 8 "$_rt" exec "$_c" sh -c 'ls /etc/php/*/fpm/php.ini /etc/php/*/apache2/php.ini 2>/dev/null' 2>/dev/null | _p2s_clean_lines); do
-                case "$_cini" in /etc/php/*/php.ini) ;; *) continue ;; esac
-                _csapi=${_cini%/php.ini}; _csapi=${_csapi##*/}
-                _p2s_check_ini "$_c ($_csapi)" "$_rt" exec -e "PHP_INI_SCAN_DIR=${_cini%/php.ini}/conf.d" "$_c" php -c "$_cini"
-            done
+            # The ini probe needs the CLI binary. Without it the runtime
+            # configuration of that container stays unchecked, and the version
+            # verdict above is all this script can say about it.
+            if [ "$_cphp" -eq 1 ]; then
+                _p2s_check_ini "$_c (CLI)" "$_rt" exec "$_c" php
+                # Debian layout inside the container: the SAPI that serves
+                # requests has its own php.ini, and that is the one that counts.
+                for _cini in $(_p2s_timeout 8 "$_rt" exec "$_c" sh -c 'ls /etc/php/*/fpm/php.ini /etc/php/*/apache2/php.ini /etc/php/*/cgi/php.ini 2>/dev/null' 2>/dev/null | _p2s_clean_lines); do
+                    case "$_cini" in /etc/php/*/php.ini) ;; *) continue ;; esac
+                    _csapi=${_cini%/php.ini}; _csapi=${_csapi##*/}
+                    _p2s_check_ini "$_c ($_csapi)" "$_rt" exec -e "PHP_INI_SCAN_DIR=${_cini%/php.ini}/conf.d" "$_c" php -c "$_cini"
+                done
+            fi
             _fpm=$(_p2s_timeout 5 "$_rt" exec "$_c" sh -c 'command -v php-fpm >/dev/null 2>&1 && grep -hE "^[[:space:]]*pm\.max_requests" /usr/local/etc/php-fpm.d/*.conf 2>/dev/null | tail -n1 | cut -d= -f2' 2>/dev/null | tr -dc '0-9')
             if _p2s_timeout 5 "$_rt" exec "$_c" sh -c 'command -v php-fpm' >/dev/null 2>&1; then
                 if [ -z "$_fpm" ] || [ "$_fpm" = 0 ]; then
@@ -670,12 +778,23 @@ _p2s_check_containers() {
             fi
             # Each path on its own: "ls a b" fails as soon as one of them is
             # missing, which hid mod_php in every official apache image.
+            # Every hit is printed, not just the first: an image can carry
+            # mod_php and php-cgi, and the urgency hangs on the whole list.
+            # cgi is decided by the SAPI's own php.ini or the cgi-bin wiring,
+            # never by "command -v php-cgi": the official FrankenPHP image
+            # ships a php-cgi binary that serves nothing, and that probe
+            # claimed the whole container was served through it.
             # shellcheck disable=SC2016  # runs inside the container, not here
-            _csapi=$(_p2s_timeout 8 "$_rt" exec "$_c" sh -c 'for f in /etc/apache2/mods-enabled/php*.load /usr/local/lib/apache2/modules/libphp*.so /usr/lib/apache2/modules/libphp*.so /etc/httpd/conf.modules.d/*php*.conf; do
-    if [ -e "$f" ]; then echo mod_php; exit 0; fi
+            for _csapi in $(_p2s_timeout 8 "$_rt" exec "$_c" sh -c 'for f in /etc/apache2/mods-enabled/php*.load /usr/local/lib/apache2/modules/libphp*.so /usr/lib/apache2/modules/libphp*.so /etc/httpd/conf.modules.d/*php*.conf; do
+    if [ -e "$f" ]; then echo mod_php; break; fi
 done
-if command -v php-fpm >/dev/null 2>&1 || command -v php-fpm8 >/dev/null 2>&1; then echo fpm; fi' 2>/dev/null | head -n1 | _p2s_clean 20)
-            [ -n "$_csapi" ] && _p2s_sapi_note "$_csapi" "$_c"
+if command -v php-fpm >/dev/null 2>&1 || command -v php-fpm8 >/dev/null 2>&1; then echo fpm; fi
+for f in /etc/php/*/cgi/php.ini /usr/lib/cgi-bin/php*; do
+    if [ -e "$f" ]; then echo cgi; break; fi
+done
+if command -v frankenphp >/dev/null 2>&1; then echo frankenphp; fi' 2>/dev/null | _p2s_clean_lines); do
+                _p2s_sapi_note "$_csapi" "$_c"
+            done
             if [ "$_opt_logs" -eq 1 ]; then
                 _p2s_count_log_hits "$_c (container log, 24 h)" "$_rt" logs --since 24h "$_c"
             fi

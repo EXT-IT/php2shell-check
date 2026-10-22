@@ -6,7 +6,7 @@
 
 [![CI](https://img.shields.io/github/actions/workflow/status/EXT-IT/php2shell-check/ci.yml?branch=main&label=CI)](https://github.com/EXT-IT/php2shell-check/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.5.0-green.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.6.0-green.svg)](CHANGELOG.md)
 [![Data](https://img.shields.io/badge/vulnerability%20data-2026--10--21-orange.svg)](#keeping-the-data-current)
 [![Maintained by EXT IT GmbH](https://img.shields.io/badge/maintained%20by-EXT%20IT%20GmbH-0a4f7a.svg)](https://ext-it.tech)
 
@@ -120,8 +120,8 @@ On the server:
 
 | Check | What it looks at |
 |---|---|
-| `php-binary` | every PHP in `/usr/bin`, `/usr/sbin`, `/usr/local`, Plesk (`/opt/plesk/php`), cPanel EasyApache (`/opt/cpanel/ea-php*`), CloudLinux alt-php, Remi, LiteSpeed, **plus every PHP that is currently running**, taken from the process list, so a build in an unusual path is not missed. Debian and Ubuntu packages are judged by package version against the distribution's fix; everything else by upstream version |
-| `sapi` | how PHP is served. The advisory demonstrates a complete unauthenticated exploit against **mod_php** and reports none for PHP-FPM, so this decides what to patch first. Detected on the host and inside each container |
+| `php-binary` | every PHP in `/usr/bin`, `/usr/sbin`, `/usr/local`, Plesk (`/opt/plesk/php`), cPanel EasyApache (`/opt/cpanel/ea-php*`), CloudLinux alt-php, Remi, LiteSpeed, `php-cgi` including `/usr/lib/cgi-bin`, FrankenPHP (read out of `frankenphp version`, which carries the embedded PHP version), **plus every PHP that is currently running**, taken from the process list, so a build in an unusual path is not missed. Debian and Ubuntu packages are judged by package version against the distribution's fix, RPM packages below the upstream fix by whether their changelog names the CVE; everything else by upstream version |
+| `sapi` | how PHP is served, and every way at once when a host has several. The advisory validated the session-lifecycle RCE against **mod_php and PHP-FPM** alike, names `php-cgi`, LiteSpeed and FrankenPHP as at risk without validating them, and this is what decides the order of patching. Detected on the host and inside each container. A host where none of them matches is told so rather than passed over in silence |
 | `container` | PHP inside every running Docker or Podman container, plus stopped containers whose image ships a vulnerable PHP and would bring it back on the next start. A Debian or Ubuntu based image is judged by the package database inside the container, for the same reason as the host: the upstream number stays unchanged when the fix is backported |
 | `mitigation` | the temporary settings from the advisory: `session.upload_progress.enabled`, `expose_php`, `post_max_size` against `memory_limit`, `max_input_nesting_level`, `fatal_error_backtraces`. On Debian layouts it reads the FPM and Apache `php.ini`, on the host and inside containers, not just the CLI one, because they differ |
 | `fpm-pool` | `pm.max_requests` in every PHP-FPM pool, and whether a pool runs as `root`, which would turn this bug into root code execution |
@@ -166,17 +166,57 @@ script knows the packages that existed on 2026-10-21:
 | Ubuntu 22.04 (php8.1) | `8.1.2-1ubuntu2.28` |
 | Ubuntu 24.04 (php8.3) | `8.3.6-0ubuntu0.24.04.13` |
 | Ubuntu 26.04 (php8.5) | `8.5.4-0ubuntu1.5` |
+| Ubuntu 26.10 (php8.5) | `8.5.9-0ubuntu2.1` |
+| Ubuntu 20.04 (php7.4) | `7.4.3-4ubuntu2.29+esm5`, needs Ubuntu Pro |
+| Ubuntu 18.04 (php7.2) | `7.2.24-0ubuntu0.18.04.17+esm14`, needs Ubuntu Pro |
+| Ubuntu 16.04 (php7.0) | `7.0.33-0ubuntu0.16.04.16+esm22`, Pro with Legacy Support |
+| Ubuntu 14.04 (php5) | `5.5.9+dfsg-1ubuntu4.29+esm18`, Pro with Legacy Support |
 | Debian 13 (php8.4) | `8.4.27-1~deb13u1`, [DSA-6574-1](https://security-tracker.debian.org/tracker/CVE-2026-109618) |
 | Debian 12 (php8.2) | `8.2.35-1~deb12u1`, [DLA-4848-1](https://security-tracker.debian.org/tracker/CVE-2026-109618) |
 | RHEL, AlmaLinux, Rocky | not in the table, reported as *undecided* |
+
+On the four ESM rows the fix exists only on a host with Ubuntu Pro attached.
+Without it the package stays below the version above and the verdict is
+*vulnerable*, which is the truthful answer for such a host.
+
+**RHEL and its rebuilds are not in that table on purpose.** They backport at an
+unchanged upstream number too, but there the deciding part is the RPM release,
+and every rebuilder sets that scheme differently — `-8.el9_8.1` at Red Hat,
+`-8.el9_8.alma.1` at AlmaLinux, `+328+1fdeb728` inside a module build. A table
+of those would be wrong within days. So when the version is below the upstream
+fix, the changelog of the installed package decides: it either names
+CVE-2026-109618 / CVE-2026-109619 or it does not. Measured on AlmaLinux 9.8 on
+2026-10-22, `php-cli-8.3.33-1.module_el9.8.0+328+1fdeb728.alma.1` is patched
+while `8.3.33` is below `8.3.36`, and the branches 8.0 and 8.1 carry fixes that
+upstream does not have at all. A package whose changelog says nothing is left
+*undecided*, not called clean: the 8.3.36 and 8.2.35 rebases are fixed through
+their version and name no CVE either.
+
+**Alpine's stable branches are a dead end, not a slow one.** Measured on
+2026-10-22: `alpine:3.24` and edge carry `php83 8.3.36-r0`, `php84 8.4.27-r0`
+and `php85 8.5.12-r0`, while 3.21, 3.22 and 3.23 sit at 8.3.19, 8.3.29 and
+8.3.31, and Alpine's own security database lists the fix for 3.24 and edge
+only. An image built on `alpine:3.22` cannot be patched with `apk upgrade`; the
+base image has to move. The official `php:*-alpine` images are not affected by
+this, they compile PHP themselves.
 
 Run an old copy a week from now and a fixed Debian 12 server can still come
 out *vulnerable*. Use the latest release.
 
 Upstream branches 7.4, 8.0 and 8.1 have no fix. The PHP team announced
-backports but had not released them when this version shipped. Until they
-appear, those versions always come out vulnerable, even if a vendor has
-patched them privately.
+backports but had not released them when this version shipped. A source build
+of those branches therefore always comes out vulnerable, even if a vendor has
+patched it privately. Distribution packages are the exception: the ESM rows
+above are judged by package version like any other, so a focal host with Pro
+attached comes out clean at an unchanged `7.4.3`.
+
+Not every PHP runtime can be read. The script knows `php`, `php-fpm`,
+`php-cgi`, `lsphp` and `frankenphp`, by path and in the process list. A
+runtime that embeds PHP under another name — Swoole, RoadRunner, `ngx_php`, a
+vendor bundle, a statically linked launcher of your own — is found only if it
+happens to run from one of those names. FrankenPHP built without a `php` CLI
+is judged by version, but its runtime configuration (the `mitigation` check)
+stays unchecked, because the ini probe needs that binary.
 
 The WAF check sees that a proxy is there, not what it blocks. Cloudflare
 said on 2026-10-21 that its managed rules cover the known attack paths on

@@ -8,6 +8,67 @@ Changes to the vulnerability data (fixed versions, distribution packages) are
 listed separately from code changes, because they change verdicts without
 changing behaviour.
 
+## [1.6.0] - 2026-10-22
+
+Built from two measured runs on a test host: an Ubuntu 26.04 matrix (mod_php
+and FPM, patched and unpatched, with and without a restart, a root pool) and a
+`php-cgi` plus FrankenPHP matrix. Both the Ubuntu 24.04 and the Ubuntu 22.04
+before/after state were re-measured for this release.
+
+### Added
+
+- `php-cgi` and FrankenPHP are found and judged. php.net names both under
+  "Who is at risk" and the script ignored them. `php-cgi` rejects `-r`, so its
+  version comes from `-v`; FrankenPHP links PHP into its own binary, so the
+  version comes from `frankenphp version` — anchored on `PHP `, because the
+  first number in that line is FrankenPHP's own. `/usr/lib/cgi-bin/php*` and
+  both binaries are in the path list and in the process list.
+- `sapi` reports every way a host serves PHP, not just the first one found. A
+  control-panel host carries mod_php and FPM side by side, and that
+  combination is what decides the urgency.
+- `sapi` says so when it cannot tell how PHP is served, instead of leaving the
+  section out. Silence in that section left the reader to guess.
+- A FrankenPHP container without a `php` CLI is judged through its own binary
+  instead of being skipped.
+- RPM systems get a second way to a definite verdict: if the version is below
+  the upstream fix, the changelog of the installed package decides. An RPM
+  distribution backports at an unchanged upstream number just like Debian
+  does, but there the deciding part is the release, and every rebuilder sets
+  that scheme differently, so a version table cannot be kept correct.
+  Measured on AlmaLinux 9.8: `php-cli-8.3.33-1.module_el9.8.0+328+1fdeb728.alma.1`
+  is patched while `8.3.33` is below the upstream `8.3.36`, and the same holds
+  for branches 8.0 and 8.1, which have no upstream fix at all. A missing entry
+  decides nothing, because the 8.3.36 and 8.2.35 rebases are fixed through
+  their version and name no CVE.
+
+### Changed
+
+- The FPM wording was wrong and is corrected. GHSA-6wmf-4rv5-p3rp validated
+  the session-lifecycle RCE "against mod_php and FPM"; only the startup
+  sequence of CVE-2026-109618 is limited by FPM exiting the child. The line
+  was an informational note that read as an all-clear and is now a warning.
+- FrankenPHP's note follows the advisory: no equivalent early configuration
+  consumer in its default configuration, which the advisory explicitly does
+  not call immune.
+- The same package in two paths (Debian ships the cgi build as
+  `/usr/bin/php-cgi8.4` and `/usr/lib/cgi-bin/php8.4`) is reported once.
+- The `cgi` SAPI is decided by the SAPI's own `php.ini` or the cgi-bin wiring,
+  never by the presence of a `php-cgi` binary. On RHEL and AlmaLinux the
+  `php-cli` package installs `/usr/bin/php-cgi`, and the official FrankenPHP
+  image ships one as well, so a host or container with nothing but the command
+  line interpreter was reported as served through CGI.
+
+### Vulnerability data
+
+- Ubuntu 26.10 (php8.5): `8.5.9-0ubuntu2.1`.
+- The four ESM releases, verified against the Ubuntu CVE page: 20.04
+  `7.4.3-4ubuntu2.29+esm5`, 18.04 `7.2.24-0ubuntu0.18.04.17+esm14`, 16.04
+  `7.0.33-0ubuntu0.16.04.16+esm22`, 14.04 `5.5.9+dfsg-1ubuntu4.29+esm18`. They
+  need Ubuntu Pro; without it the host stays below them and is reported
+  vulnerable, which is the truthful answer.
+- `5.5.9`, `7.0.33`, `7.2.24`, `7.4.3` and `8.5.9` added to the frozen numbers
+  a remote banner cannot be judged by.
+
 ## [1.5.0] - 2026-10-21
 
 Built from a container case matrix on a test host: official Debian-based and

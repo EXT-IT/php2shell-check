@@ -101,6 +101,14 @@ _hl_deb A5 trixie   php8.4 8.4.27-1~deb13u1        8.4.27  ok
 # no codename at all. Neither may be answered with ok or vuln.
 _hl_deb A6 questing php8.3 8.3.6-0ubuntu0.25.10.2  8.3.6   unknown
 _hl_deb A6b ''      php8.3 8.3.6-1                 8.3.6   unknown
+# A6c-A6f: releases past standard support, plus 26.10. On the ESM releases the
+# same host is vuln without Ubuntu Pro and ok with it, at an unchanged
+# upstream number — and branch 7.4 and older has no upstream fix at all, so
+# only the package version can decide these rows.
+_hl_deb A6c focal    php7.4 7.4.3-4ubuntu2.29      7.4.3   vuln
+_hl_deb A6d focal    php7.4 7.4.3-4ubuntu2.29+esm5 7.4.3   ok
+_hl_deb A6e trusty   php5   5.5.9+dfsg-1ubuntu4.29+esm18 5.5.9 ok
+_hl_deb A6f stonking php8.5 8.5.9-0ubuntu2         8.5.9   vuln
 
 # ---------------------------------------------------------------------------
 # A7/A8: a source build in /usr/local
