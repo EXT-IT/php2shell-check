@@ -961,14 +961,22 @@ _p2s_running_php_paths() {
 # a glibc image of another vintage links against the host's libraries, so what
 # it prints is not necessarily what the container runs.
 #
-# Three sources answer without execution, in this order:
+# Three sources answer without execution, in this order. All three were
+# measured against real containers on a Docker host on 2026-10-22, and the
+# order matters more than it looks:
 #   1. the container's own dpkg database, which the Debian/Ubuntu verdict needs
-#      anyway — a backported 8.3.6 can only be decided from the package version
-#   2. PHP_VERSION in the process environment, which the official php,
-#      wordpress and FrankenPHP images set in the image; the container check
-#      already judges stopped containers from exactly this value
+#      anyway — a backported 8.3.6 can only be decided from the package
+#      version. Measured: dpkg-query --admindir on /proc/<pid>/root answers
+#      "php8.3-fpm 8.3.6-0ubuntu0.24.04.13" for an Ubuntu 24.04 container.
+#   2. PHP_VERSION in the process environment. The official php, wordpress and
+#      FrankenPHP images set it, but only CLI-style processes still carry it:
+#      measured, php:8.3.35-cli has PHP_VERSION=8.3.35 in /proc/<pid>/environ
+#      while the php-fpm master has overwritten that memory with its process
+#      title ("master process (...)"). So this source misses exactly the SAPI
+#      that matters most, which is why 3 exists.
 #   3. main/php_version.h of a source build, which those images ship with
-#      their headers
+#      their headers. Measured: this is what answered for php:8.3.35-fpm
+#      (#define PHP_VERSION "8.3.35").
 # Nothing found means the verdict says so, see _p2s_check_ns_binary.
 _p2s_ns_php_version() {   # process-dir root-prefix path-inside-that-root
     local _pd=$1 _r=$2 _e=$3 _v='' _pkg _pv _h
