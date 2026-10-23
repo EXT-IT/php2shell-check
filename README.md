@@ -7,7 +7,7 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/EXT-IT/php2shell-check/ci.yml?branch=main&label=CI)](https://github.com/EXT-IT/php2shell-check/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-1.6.0-green.svg)](CHANGELOG.md)
-[![Data](https://img.shields.io/badge/vulnerability%20data-2026--10--21-orange.svg)](#keeping-the-data-current)
+[![Data](https://img.shields.io/badge/vulnerability%20data-2026--10--22-orange.svg)](#keeping-the-data-current)
 [![Maintained by EXT IT GmbH](https://img.shields.io/badge/maintained%20by-EXT%20IT%20GmbH-0a4f7a.svg)](https://ext-it.tech)
 
 </div>
@@ -187,7 +187,7 @@ among the products that embed PHP, and none of them can run this script. Check
 them with their vendors.
 
 The fix table goes stale. Distributions publish fixes over days. The
-script knows the packages that existed on 2026-10-21:
+script knows the packages that existed on 2026-10-22:
 
 | Release | Fixed package |
 |---|---|
