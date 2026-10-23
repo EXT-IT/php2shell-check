@@ -110,12 +110,18 @@ jobs:
         # administrators run instead. The script targets 5.1 and must not
         # break on 7.
         shell: [powershell, pwsh]
+    # The shell has to be chosen here and not per step: a step's "shell" key is
+    # not one of the places where an expression is allowed (it is absent from
+    # the context-availability table, while jobs.<id>.defaults.run is listed
+    # with matrix), and GitHub rejects the whole file rather than the one line.
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
     steps:
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
 
       - name: Show the host and the shell
-        shell: ${{ matrix.shell }}
         run: |
           $PSVersionTable.PSVersion.ToString()
           (Get-CimInstance Win32_OperatingSystem).Caption
@@ -130,7 +136,6 @@ jobs:
       # takes its value through -ArgumentList.
       # -Path takes one string, not a list, so the whole tree is scanned.
       - name: PSScriptAnalyzer
-        shell: ${{ matrix.shell }}
         run: |
           Install-Module PSScriptAnalyzer -Force -Scope CurrentUser -SkipPublisherCheck -AllowClobber
           $f = Invoke-ScriptAnalyzer -Path . -Recurse -Severity Error
@@ -138,5 +143,4 @@ jobs:
           if ($f) { exit 1 }
 
       - name: Run tests
-        shell: ${{ matrix.shell }}
         run: ./tests/run_tests.ps1
