@@ -48,25 +48,47 @@ Without root it still runs, but it cannot see containers or other users'
 processes and says so in the output. Checking only websites is useful for a
 quick overview of a fleet, but it never replaces a run on each server.
 
-<details>
-<summary>Read it first, or verify its checksum</summary>
+## Or take the repository
 
-Want to read the script first, or check it against its SHA-256 sum? Download
-the latest release and run it step by step:
+The one-liner is the short way. Clone the repository when you want to read the
+script first, keep it on a jump host, or run it again next month:
+
+```sh
+git clone https://github.com/EXT-IT/php2shell-check.git
+cd php2shell-check
+sudo bash php2shell-check.sh https://your-site.example
+```
+
+```powershell
+git clone https://github.com/EXT-IT/php2shell-check.git
+cd php2shell-check
+.\php2shell-check.ps1 https://your-site.example
+```
+
+Without git, take the two files from the latest release and check them against
+their SHA-256 sums before running anything:
 
 ```sh
 curl -fsSLO https://github.com/EXT-IT/php2shell-check/releases/latest/download/php2shell-check.sh
 curl -fsSLO https://github.com/EXT-IT/php2shell-check/releases/latest/download/SHA256SUMS
-sha256sum -c SHA256SUMS          # macOS: shasum -a 256 -c SHA256SUMS
+sha256sum --ignore-missing -c SHA256SUMS   # macOS: shasum -a 256 --ignore-missing -c SHA256SUMS
 less php2shell-check.sh
 sudo bash php2shell-check.sh https://your-site.example
 ```
 
-Without root it still runs, but it cannot see containers or other users'
-processes and says so in the output. Checking only websites is useful for a
-quick overview of a fleet, but it never replaces a run on each server.
+```powershell
+irm https://github.com/EXT-IT/php2shell-check/releases/latest/download/php2shell-check.ps1 -OutFile php2shell-check.ps1
+irm https://github.com/EXT-IT/php2shell-check/releases/latest/download/SHA256SUMS -OutFile SHA256SUMS
+$want = (Get-Content ./SHA256SUMS | Select-String 'php2shell-check\.ps1').ToString().Split()[0]
+$got = (Get-FileHash ./php2shell-check.ps1 -Algorithm SHA256).Hash.ToLower()
+if ($want -eq $got) { 'checksum ok' } else { 'MISMATCH' }
+.\php2shell-check.ps1 https://your-site.example
+```
 
-</details>
+`SHA256SUMS` lists both editions, hence `--ignore-missing` when you took only
+one of them. If PowerShell's execution policy refuses the script, run it as
+`powershell -ExecutionPolicy Bypass -File .\php2shell-check.ps1`.
+
 
 Only a website, from any computer and without root:
 
