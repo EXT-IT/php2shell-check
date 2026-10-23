@@ -6,7 +6,7 @@
 
 [![CI](https://img.shields.io/github/actions/workflow/status/EXT-IT/php2shell-check/ci.yml?branch=main&label=CI)](https://github.com/EXT-IT/php2shell-check/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.6.0-green.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.1.0-green.svg)](CHANGELOG.md)
 [![Data](https://img.shields.io/badge/vulnerability%20data-2026--10--22-orange.svg)](#keeping-the-data-current)
 [![Maintained by EXT IT GmbH](https://img.shields.io/badge/maintained%20by-EXT%20IT%20GmbH-0a4f7a.svg)](https://ext-it.tech)
 
@@ -24,7 +24,8 @@ hand-built PHP, and gives one verdict per PHP runtime. It is read-only: it
 reads package databases, asks each PHP binary for its version and settings,
 and sends one ordinary GET request to each URL you give it, following
 redirects only on that same host. No exploit traffic, nothing written to
-disk.
+disk. Windows servers get their own script, `php2shell-check.ps1`, for reasons
+that are in [Windows servers](#windows-servers).
 
 > **Run it on the server.** That is the only way to get a definite answer.
 > There the script reads the real versions of every PHP installation, every
@@ -128,6 +129,128 @@ them patched. Three cases that used to end in `0` now end in `2`, because
 
 A version *below* the fix is still `1`, from a header too: if that header
 lies, it only costs a look.
+
+## Windows servers
+
+Skip this if you run no Windows server.
+
+On Windows the version number is the answer. The php.net builds carry the real
+upstream version, there is no distribution that backports a fix behind an
+unchanged number, and so `php.exe` reporting 8.3.35 means 8.3.35 and nothing
+else. That is why Windows has its own script instead of a flag: none of the
+package-database machinery that the shell version needs applies, and all of
+the IIS machinery it does need has no counterpart on Linux.
+
+```console
+PS> powershell -ExecutionPolicy Bypass -File php2shell-check.ps1 https://www.example.com
+```
+
+A run on a server that has both versions unpacked and IIS pointing at the new
+one, with the website check left out. Two sites are configured there, which is
+why the `sapi` check answers twice and three FastCGI pools show up — one line
+per handler, not one per host:
+
+```console
+php2shell-check 2.1.0  CVE-2026-109618 / CVE-2026-109619, data as of 2026-10-22
+WEB01 (Microsoft Windows Server 2022 Standard)
+
+PHP installations on this host
+  [VULN] php-binary     C:\php\8.3.35
+         PHP 8.3.35, fixed in 8.3.36 (php.exe, php-cgi.exe, phpdbg.exe, php-win.exe)
+         -> Update PHP to 8.3.36 or later, then recycle the FastCGI application or the application pool
+  [ OK ] php-binary     C:\php\8.3.36
+         PHP 8.3.36 (fixed from 8.3.36) (php.exe, php-cgi.exe, phpdbg.exe, php-win.exe)
+
+How PHP is served
+  [WARN] sapi           PHP_site2 (*.php2)
+         served by php-cgi through IIS FastCGI: C:\php\8.3.36\php-cgi.exe. php.net names php-cgi under 'Who is at risk', the advisories validate no exploit against it
+         -> A FastCGI process serves many requests, so judge this like PHP-FPM, not like one process per request
+  [WARN] sapi           PHP_via_FastCGI (*.php)
+         served by php-cgi through IIS FastCGI: C:\php\8.3.36\php-cgi.exe. php.net names php-cgi under 'Who is at risk', the advisories validate no exploit against it
+         -> A FastCGI process serves many requests, so judge this like PHP-FPM, not like one process per request
+  [INFO] fastcgi-pool   C:\php\8.3.35\php-cgi.exe
+         instanceMaxRequests = 10000
+         -> A low instanceMaxRequests retires workers sooner; it is not one of the advisory measures
+  [INFO] fastcgi-pool   C:\php\8.3.36\php-cgi.exe
+         instanceMaxRequests = 10000
+         -> A low instanceMaxRequests retires workers sooner; it is not one of the advisory measures
+  [INFO] fastcgi-pool   C:\php\8.3.36\php-cgi.exe
+         instanceMaxRequests = 200, arguments '-d open_basedir=C:\inetpub\wwwroot'
+         -> A low instanceMaxRequests retires workers sooner; it is not one of the advisory measures
+
+Runtime configuration
+  [WARN] disclosure     C:\php\8.3.35\php.ini
+         expose_php is on, so the PHP version is in the response headers for everyone
+         -> Set expose_php=0 so scanners cannot pick vulnerable targets by header
+  [WARN] mitigation     C:\php\8.3.35\php.ini
+         temporary measures from the advisory not set: memory_limit=-1 (now 128M) a low post_max_size (8M without file uploads, 32M with; now 64M) session.upload_progress.enabled=0.
+         -> Until patched: set memory_limit=-1 and session.upload_progress.enabled=0 where applications cannot override them, keep post_max_size low, and recycle every worker. Only an update is a complete solution
+  [WARN] mitigation     C:\php\8.3.36
+         no php.ini next to these binaries, and none in the registry, in PHPRC or in the Windows directory, so this installation runs on PHP's compiled defaults and none of the temporary measures is set
+         -> Copy php.ini-production next to php.exe and set the measures from the advisory, or confirm with "php --ini" which file is really in use
+  [WARN] forced-ini     C:\php\8.3.36\php-cgi.exe
+         the FastCGI pool forces settings through its arguments: '-d open_basedir=C:\inetpub\wwwroot', so the php.ini lines in this report do not describe that pool
+         -> Check the forced values against the advisory measures, then recycle the FastCGI application
+
+Summary  1 vulnerable, 0 undecided, 6 warnings, 1 ok
+  VULNERABLE  at least one PHP runtime needs an update now.
+
+How reliable this is
+  Ran on this host: the versions above are read out of the files
+  themselves, which is the definite answer for what is installed.
+  What no check can prove on Windows is which code a running worker
+  already executes, so recycle the FastCGI application or the
+  application pool after every PHP update.
+```
+
+Run it in an elevated PowerShell. It needs Windows PowerShell 5.1, which every
+Windows Server since 2016 has without an installation, and runs under
+PowerShell 7 as well. The exit codes are the ones above, and the options come
+in both spellings — `-RemoteOnly` and `--remote-only` do the same thing — so
+one fleet script can call this on Windows and the shell version everywhere
+else. Two differences: `--no-containers` and `--no-logs` are accepted and do
+nothing, because neither check exists here, and `--origin` does not exist at
+all. It ends in a usage error rather than silently treating the address you
+passed as another website to check.
+
+| Check | What it looks at |
+|---|---|
+| `php-binary` | every `php.exe`, `php-cgi.exe` and `php*.dll` under the paths the Windows installers use: Chocolatey (`C:\tools\php*`), Scoop, WinGet, XAMPP, WampServer, Laragon, EasyPHP, Plesk, Zend Server, plus a scan of every fixed drive. Judged by the version resource in the file, not by its path or its name |
+| `iis` | which binary actually serves `.php`, read out of `applicationHost.config`: the FastCGI entries, the handler mappings including the `scriptProcessor` form that packs two paths into one pipe-separated string, and `instanceMaxRequests` |
+| `process` | PHP that is running now. The version comes from the file on disk, so an application pool still serving the old `php-cgi.exe` after an update is visible — which is the usual state of a Windows server an hour after someone unpacked the new PHP |
+| `stale-evidence` | a PHP DLL that was renamed out of the way but is still loaded, and a rename queued in `PendingFileRenameOperations`, meaning the update finishes at the next reboot and not before |
+| `ini`, `mitigation` | the temporary measures from the advisory, read out of every `php.ini` it can find: next to each binary (`php-cgi.ini` before `php.ini`, because that is the order PHP itself uses), `phpForApache.ini` for WampServer, the path in `HKLM\SOFTWARE\PHP`, `PHPRC`, and the Windows directory |
+| `remote` | the URL checks, identical to the shell version |
+
+What it does not do, measured on Windows Server 2022 with IIS 10 on
+2026-10-22:
+
+- **File timestamps are not evidence on NTFS and are not used.** NTFS tunneling
+  hands a replaced file the creation time of the one it replaced, so a `php.exe`
+  put there ten minutes ago can carry a creation date from last year. The
+  verdict comes from the version resource only. A build whose resource is empty
+  — a self-compiled binary, a repacked bundle — is *undecided*, never clean.
+- **Without Administrator rights the IIS part is missing.** `applicationHost.config`
+  is readable by SYSTEM and the Administrators group, nothing else, so an
+  unelevated run finds the installations but cannot say which one answers a
+  request. It says so instead of leaving the gap open.
+- **Only IIS is read.** Apache and nginx on Windows serve PHP through their own
+  configuration, and the script does not parse it. Their binaries are still
+  found and judged; what is missing is the link from a site to a binary.
+- **It never starts a PHP binary.** Every version comes out of the file's
+  version resource and every setting out of an ini file on disk. That keeps the
+  script harmless on a production server, and it means a setting that only the
+  running process knows — a compiled-in default, something an application sets
+  at runtime — stays invisible. `php --ini` on the host is the way to see which
+  file actually wins.
+- Windows Server 2022 and IIS 10 are what this was measured against. 2016,
+  2019 and 2025 use the same interfaces and are expected to work; nobody has
+  run it there yet.
+
+The two scripts carry the same table of fixed versions, and that is the one
+thing neither of them can check by running: a Windows run never reads the
+shell table, a Linux run never reads the PowerShell one. So `tests/data_parity.py`
+compares them and fails on the first number that drifts apart.
 
 ## What it checks
 
@@ -238,6 +361,11 @@ patched it privately. Distribution packages are the exception: the ESM rows
 above are judged by package version like any other, so a focal host with Pro
 attached comes out clean at an unchanged `7.4.3`.
 
+PHP on Windows is a separate script with separate limits, see
+[Windows servers](#windows-servers). The shell version does not run there and
+does not pretend to: a `--remote-only` run from a Mac or a Linux box judges a
+Windows site by its headers like any other, which is the same thin answer.
+
 Not every PHP runtime can be read. The script knows `php`, `php-fpm`,
 `php-cgi`, `lsphp` and `frankenphp`, by path and in the process list. A
 runtime that embeds PHP under another name — Swoole, RoadRunner, `ngx_php`, a
@@ -284,11 +412,24 @@ test in `tests/run_tests.sh`. If you keep your own copy current, link the
 distribution's advisory next to each entry.
 
 ```sh
-bash tests/run_tests.sh      # no root, no network, no Docker needed
+bash tests/run_tests.sh        # no root, no network, no Docker needed
+python3 tests/data_parity.py   # both editions carry the same numbers
 ```
 
-CI runs the tests on Ubuntu 22.04 and 24.04, Debian 12 and 13, Rocky Linux 9,
-Alpine and macOS (bash 3.2), and checks `SHA256SUMS` against the script.
+```console
+PS> .\tests\run_tests.ps1
+```
+
+Windows PowerShell 5.1 runs all of those. PowerShell 7 cannot build the fake
+`php.exe` they need — it refuses to emit an executable assembly — so there it
+falls back to the C# compiler that Windows ships with .NET Framework, and
+where neither exists the host checks are skipped with the reason printed. On a
+Mac that leaves the option, version and remote cases, which do run.
+
+CI runs the shell tests on Ubuntu 22.04 and 24.04, Debian 12 and 13, Rocky
+Linux 9, Alpine and macOS (bash 3.2), the PowerShell tests on Windows in both
+5.1 and 7, the parity check on every push, and verifies `SHA256SUMS` against
+both scripts.
 
 ## Background
 
