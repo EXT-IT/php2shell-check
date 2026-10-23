@@ -125,6 +125,18 @@ lies, it only costs a look.
 | `--json` | one JSON object on stdout, for monitoring and fleet runs |
 | `--no-color`, `-q` | plain output; summary only |
 
+## Help with the patching
+
+Knowing where you stand is the easy half. The other half is an end-of-life
+Ubuntu that needs ESM attached, an image nobody has rebuilt in two years, or a
+container whose base distribution has no fix at all and never will.
+
+EXT IT GmbH does that as paid work:
+[ext-it.tech/kontakt](https://ext-it.tech/kontakt/). That is a service for your
+servers, not support for this script — the script stays as it is, free of
+charge and without warranty, and the disclaimer at the bottom of this page is
+unchanged.
+
 <details>
 <summary><b>Example output</b> — one Linux host, one Windows host</summary>
 
