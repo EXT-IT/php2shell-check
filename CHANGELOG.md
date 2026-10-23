@@ -8,6 +8,49 @@ Changes to the vulnerability data (fixed versions, distribution packages) are
 listed separately from code changes, because they change verdicts without
 changing behaviour.
 
+## [2.1.1] - 2026-10-23
+
+Everything in this release was found by the pipeline and the two Windows
+branches of its matrix minutes after 2.1.0 went out, which is what they are
+for. No verdict changes.
+
+### Fixed
+
+- **The file list of an installation came out in a different order depending on
+  which PowerShell ran the check.** `Sort-Object` compares culture-aware, and
+  the collation tables of Windows PowerShell (NLS) and PowerShell 7 (ICU) order
+  punctuation differently: 5.1 printed `php.exe, php-cgi.exe`, 7 printed
+  `php-cgi.exe, php.exe`. A report that reads differently depending on the
+  interpreter cannot be compared between two runs. All five lists sort
+  ordinally now.
+- **Usage errors were wrapped in PowerShell's error decoration.**
+  `Write-Error` breaks the line at the console width and adds a
+  "powershell.EXE : ... + CategoryInfo" block, which on a narrow console cut
+  the sentence in half. They are one line on stderr now, prefixed with the tool
+  name, the way the shell edition answers.
+- **The 2.1.0 release did not carry the PowerShell edition at all.** The
+  release workflow predates it and attached only the shell script, while
+  `SHA256SUMS` listed both -- so the permanent download link for
+  `php2shell-check.ps1` answered 404 and the checksum file pointed at a file
+  that was not there. Both are attached, and an existing release has its assets
+  synced instead of being skipped.
+- The CI workflow was invalid as a whole: a step's `shell` key is not a place
+  where an expression may be used, so `shell: ${{ matrix.shell }}` stopped
+  every job in the file from starting. Neither a YAML parse nor yamllint can
+  see this.
+
+### Changed
+
+- The README leads with one line to copy per platform, for a server and for a
+  website alone, and keeps 129 of its 492 lines open; the rest is folded. The
+  Windows line writes the script to the temp directory, runs it and deletes it,
+  because the usual `iex "& { $(irm ...) }"` form ends the whole session when
+  the script exits -- measured, which costs an administrator the console window
+  and the result with it.
+- A red Windows job used to report nothing but "failure": the log needs a token
+  and the jobs API gives only step names. Every failing case is repeated as an
+  annotation now, which is served without a token.
+
 ## [2.1.0] - 2026-10-23
 
 ### Added
