@@ -35,12 +35,28 @@ jobs:
         run: |
           tag=$(git tag --list 'v*' --sort=-v:refname | head -n1)
           if [ -z "$tag" ]; then echo "no tag yet"; exit 0; fi
-          if gh release view "$tag" >/dev/null 2>&1; then
-            echo "release $tag exists"; exit 0
-          fi
+
+          # Check out the tag before anything is read or uploaded. The job also
+          # runs on a push to main, and an asset taken from main would be
+          # published under the tag's release while claiming to be that
+          # version.
           git checkout -q "$tag"
           sha256sum -c SHA256SUMS
+          files="php2shell-check.sh php2shell-check.ps1 SHA256SUMS"
+
+          # An existing release can still be missing an asset: the Windows
+          # edition was added after this workflow was written, so the 2.1.0
+          # release shipped a SHA256SUMS that listed a file it did not carry.
+          # Uploading with --clobber repairs that without touching the tag.
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "release $tag exists, syncing its assets with the tag"
+            # shellcheck disable=SC2086  # the file list is meant to split
+            gh release upload "$tag" $files --clobber
+            exit 0
+          fi
+
           ver=${tag#v}
           awk -v h="## [$ver]" 'index($0, h) == 1 {f = 1; next} /^## \[/ {if (f) exit} f' CHANGELOG.md > notes.md
-          gh release create "$tag" php2shell-check.sh SHA256SUMS \
+          # shellcheck disable=SC2086  # the file list is meant to split
+          gh release create "$tag" $files \
             --title "php2shell-check $ver" --notes-file notes.md --verify-tag
