@@ -16,7 +16,7 @@
 set -u
 export LC_ALL=C
 
-P2S_SCRIPT_VERSION='2.1.1'
+P2S_SCRIPT_VERSION='3.0.0'
 P2S_DATA_DATE='2026-10-22'
 P2S_ADVISORY='GHSA-w8hw-w9fx-j79w'
 P2S_ADVISORY_URL='https://github.com/php/php-src/security/advisories/GHSA-w8hw-w9fx-j79w'

@@ -69,7 +69,7 @@ $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
 Set-StrictMode -Off
 
-$script:P2sScriptVersion = '2.1.1'
+$script:P2sScriptVersion = '3.0.0'
 $script:P2sDataDate = '2026-10-22'
 $script:P2sAdvisory = 'GHSA-w8hw-w9fx-j79w'
 $script:P2sAdvisoryUrl = 'https://github.com/php/php-src/security/advisories/GHSA-w8hw-w9fx-j79w'

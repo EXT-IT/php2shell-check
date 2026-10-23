@@ -6,7 +6,7 @@
 
 [![CI](https://img.shields.io/github/actions/workflow/status/EXT-IT/php2shell-check/ci.yml?branch=main&label=CI)](https://github.com/EXT-IT/php2shell-check/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-2.1.1-green.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-3.0.0-green.svg)](CHANGELOG.md)
 [![Data](https://img.shields.io/badge/vulnerability%20data-2026--10--22-orange.svg)](#keeping-the-data-current)
 [![Maintained by EXT IT GmbH](https://img.shields.io/badge/maintained%20by-EXT%20IT%20GmbH-0a4f7a.svg)](https://ext-it.tech)
 
@@ -304,6 +304,15 @@ foreign root as root on the host. Where no version can be read from data at
 all, the line is *undecided* — never clean. And where a container runtime is
 running that nothing could be asked about, that is its own *undecided* line
 rather than silence.
+
+**Inside a container, root cannot inspect workers that belong to another
+user.** Measured in an unmodified `php:8.3-fpm` container: the master runs as
+root and is readable, the two workers run as `www-data` and their
+`/proc/<pid>/exe` is not, because Docker's default capability set does not
+include `SYS_PTRACE`. The restart state of those workers is therefore unknown,
+the run says so, and the result is *undecided* — that is the normal outcome of
+a run inside a container, not a sign of trouble. Run it on the host, where root
+reads every process, or grant `--cap-add=SYS_PTRACE` for the check.
 
 A green result covers what the script can see. A FreeBSD jail, a VM on the
 same host or an appliance with a web interface stays invisible. The heise

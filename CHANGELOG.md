@@ -8,6 +8,44 @@ Changes to the vulnerability data (fixed versions, distribution packages) are
 listed separately from code changes, because they change verdicts without
 changing behaviour.
 
+## [3.0.0] - 2026-10-23
+
+One contributed fix, and it changes an exit code the same way 2.0.0 did, which
+is what makes this a major release. Thanks to Artifex Ignotvs
+([#1](https://github.com/EXT-IT/php2shell-check/pull/1)).
+
+### Breaking
+
+- **A process whose executable cannot be inspected is reported as undecided
+  (exit 2), where the check used to answer `ok`.** The stale-worker check reads
+  `/proc/<pid>/exe` and silently skipped every process it could not read. Root
+  inside a container does not mean access to a worker owned by another user:
+  measured in an unmodified `php:8.3-fpm` container, the master runs as root
+  and is readable, both workers run as `www-data` and are not, because Docker's
+  default capability set has no `SYS_PTRACE`. The published 2.1.1 answered
+  `[ OK ] process host`, "no PHP process runs a replaced binary", exit 0 —
+  about two workers it had never looked at. It now answers `[ ?? ] process`,
+  names how many processes it could not inspect, and the run is undecided.
+
+  A run inside a container is therefore undecided unless the capability is
+  granted. That is the truthful answer to "does the running code have the fix",
+  and it is the same reasoning as 2.0.0: a pipeline that treats `0` as all
+  clear will see `2` where it used to see `0`. The PowerShell edition has
+  reported an uninspectable process as undecided since 2.1.0, so the two
+  editions now agree.
+
+- Zombies and processes that disappear mid-scan are ignored rather than counted
+  as uninspectable, and an unreadable Apache `maps` file is told apart from one
+  that simply has no PHP mapping (`grep` exit 2 versus 1).
+
+### Added
+
+- `tests/cases/stale_processes.sh`, eleven cases over the existing
+  `P2S_PROC_ROOT` hook: current and deleted FPM executables, unreadable FPM and
+  Apache evidence, both findings at once, an unrelated unreadable process, a
+  vanished process and a zombie. The stale-process check reads its proc root
+  through that hook now, which is what makes it testable at all.
+
 ## [2.1.1] - 2026-10-23
 
 Everything in this release was found by the pipeline and the two Windows
