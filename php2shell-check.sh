@@ -16,7 +16,7 @@
 set -u
 export LC_ALL=C
 
-P2S_SCRIPT_VERSION='3.0.1'
+P2S_SCRIPT_VERSION='3.1.0'
 P2S_DATA_DATE='2026-10-22'
 P2S_ADVISORY='GHSA-w8hw-w9fx-j79w'
 P2S_ADVISORY_URL='https://github.com/php/php-src/security/advisories/GHSA-w8hw-w9fx-j79w'
@@ -1757,9 +1757,18 @@ _p2s_check_url() {
             elif [ "$_non_cf" -eq 1 ] && [ "$_cf_ip" -eq 1 ]; then
                 _p2s_add warn waf "$_url" "Cloudflare answered, but $_ehost also resolves to non-Cloudflare addresses ($(printf '%s' "$_ips" | tr '\n' ' ' | _p2s_clean 120))" \
                     'Every DNS record of the site should be proxied (orange cloud), otherwise part of the traffic skips the WAF'
-            else
+            elif [ -z "$_ips" ]; then
                 _p2s_add ok waf "$_url" 'Cloudflare headers present (DNS could not be confirmed from here)' \
                     'Keep the Cloudflare Managed/Free ruleset enabled and make sure the origin only accepts Cloudflare (tunnel or firewall)'
+            else
+                # DNS answered, and not one of the addresses belongs to
+                # Cloudflare. Until 3.0.1 this shared a branch with "DNS could
+                # not be confirmed" and was reported as ok, which reads as
+                # protected: the headers can come from a cache or a proxy in
+                # front while the host that serves the site is not proxied at
+                # all. Two different states, two different answers.
+                _p2s_add warn waf "$_url" "Cloudflare headers present, but $_ehost resolves only to non-Cloudflare addresses ($(printf '%s' "$_ips" | tr '\n' ' ' | _p2s_clean 120)): the headers may come from a cache or a proxy in front, while the host that serves the site is not proxied" \
+                    'Check which name actually serves the site and proxy that record through Cloudflare (orange cloud), or confirm with your provider which edge answers'
             fi ;;
         '')
             if [ "$_cf_ip" -eq 1 ]; then
