@@ -8,6 +8,82 @@ Changes to the vulnerability data (fixed versions, distribution packages) are
 listed separately from code changes, because they change verdicts without
 changing behaviour.
 
+## [2.1.0] - 2026-10-23
+
+### Added
+
+- `php2shell-check.ps1`, a PowerShell edition for Windows servers. Windows is
+  the one platform where the version number decides on its own: the php.net
+  builds carry the real upstream version, so the backport trap that the whole
+  shell edition is built around does not exist there. Everything else does not
+  carry over at all — there is no package database to ask, and `applicationHost.config`
+  decides which of several installed binaries actually answers a request. That
+  is why this is a second script and not a flag on the first one. Checks:
+  installations under the paths the Windows installers use, judged by the
+  version resource in the file; the IIS FastCGI entries and handler mappings,
+  including the pipe-separated `scriptProcessor` form; running processes, read
+  from the file on disk so an application pool still serving the old binary is
+  visible; a renamed but still loaded DLL and a rename queued in
+  `PendingFileRenameOperations`; the ini settings and the advisory's temporary
+  measures; and the same URL checks as the shell edition, with the same options
+  and the same exit codes. It never starts a PHP binary: versions come out of
+  the version resource, settings out of the ini files on disk. Both option
+  spellings work, the PowerShell one and the shell one, so a fleet script does
+  not have to know which host it is talking to; `--origin` is refused with a
+  usage error instead of being dropped, because dropping it would turn the
+  address into another target.
+- `tests/run_tests.ps1`, and a CI job that runs it on Windows under both
+  Windows PowerShell 5.1 and PowerShell 7. 5.1 is the target, because that is
+  what a Windows Server has before anyone installs anything.
+- `tests/data_parity.py`, which compares the vulnerability data of the two
+  editions and fails on the first number that drifts. Two files carrying the
+  same table is the one thing no run of either can catch: a Linux run never
+  reads the PowerShell table, a Windows run never reads the shell one, and both
+  would pass their own tests while giving different verdicts for the same PHP.
+
+### Changed
+
+- The shell edition is 2.1.0 with no change to its behaviour. A release ships
+  both files, and a pair of version numbers that drift apart makes it
+  impossible to say afterwards which combination was measured.
+
+### Measured, and the limits that came out of it
+
+Windows Server 2022, IIS 10, PHP 8.3.35 and 8.3.36 side by side, 2026-10-22
+and 2026-10-23. Two of these only showed up once the tests ran on the real
+thing, and both were wrong in the direction that matters:
+
+- **A host with no `php.ini` at all came out undecided although it was fully
+  patched.** The missing file was reported as "the measures could not be
+  read", and any undecided line sets exit 2. But the absence of every
+  candidate file is itself a measurement: PHP then runs on its compiled
+  defaults, so the measures are simply not set. That is a warning, the same as
+  on Linux, and it leaves the patch verdict alone.
+- **The measures were reported per php.ini, not per installation.** On the
+  test server `C:\php\8.3.36` served every request without an ini of its own
+  while `C:\php\8.3.35` had one, and the report printed the settings of the
+  installation that was not serving while saying nothing about the one that
+  was. The missing file is now named per installation, and the host-wide line
+  is gone.
+- **A file without a version resource does not answer with empty properties,
+  it answers `0.0.0.0`.** The verdict stayed undecided either way, but for the
+  wrong reason — "branch 0.0 is not covered by the advisory data" instead of
+  "no readable version resource". A zero version now reads as nothing there.
+
+The limits that stand:
+
+- NTFS tunneling is on by default and hands a replaced file the creation time
+  of the file it replaced. So a timestamp is not evidence that an update
+  happened, and the script judges by the version resource alone. The version
+  resource is present in `php.exe`, `php-cgi.exe` and `php8.dll` alike; a build
+  without one is *undecided*.
+- `applicationHost.config` is readable by SYSTEM and Administrators only. An
+  unelevated run reports the gap rather than skipping the IIS part silently.
+- Pointing IIS at the new PHP leaves the running worker on the old binary until
+  the pool recycles, which is what the process check is for.
+- Apache and nginx on Windows are not parsed. Their binaries are found and
+  judged; the link from a site to a binary is missing.
+
 ## [2.0.0] - 2026-10-22
 
 Three ways to a green result that said nothing, found by checking the script
