@@ -13,28 +13,120 @@
 </div>
 
 On Ubuntu 24.04, `php -v` prints `PHP 8.3.6` before the fix and after it.
-Canonical backports security patches and keeps the version number, so the
-number that every quick check looks at tells you nothing. The patched package
-is `8.3.6-0ubuntu0.24.04.13`, and only the package database knows whether you
-have it. Your WordPress container, meanwhile, ships its own PHP that `apt`
-never sees.
+Canonical backports the patch and keeps the version number, so the number every
+quick check looks at tells you nothing — only the package database knows. Your
+WordPress container, meanwhile, ships its own PHP that `apt` never sees. On
+Windows it is the other way round: there the version number is the whole
+answer, and the IIS configuration decides which of several installed binaries
+answers a request.
 
-`php2shell-check.sh` looks in both places, plus Plesk, cPanel, CloudLinux and
-hand-built PHP, and gives one verdict per PHP runtime. It is read-only: it
-reads package databases, asks each PHP binary for its version and settings,
-and sends one ordinary GET request to each URL you give it, following
-redirects only on that same host. No exploit traffic, nothing written to
-disk. Windows servers get their own script, `php2shell-check.ps1`, for reasons
-that are in [Windows servers](#windows-servers).
+Two scripts, one verdict per PHP runtime. Both are read-only: they read package
+databases and version resources, ask each PHP for its settings, and send one
+ordinary GET request to each URL you name. No exploit traffic, nothing written
+to disk.
 
-> **Run it on the server.** That is the only way to get a definite answer.
-> There the script reads the real versions of every PHP installation, every
-> container and every FPM pool. A check from outside sees only what a site
-> chooses to put in its headers, which on most sites is nothing at all. The
-> script never turns that silence into a clean result: a website whose patch
-> level it cannot determine comes back as **undecided**, with a pointer to
-> run it on the server, and never as "not vulnerable". Every run ends with a
-> "How reliable this is" block that says which of the two it was.
+## Run it
+
+On a Linux server:
+
+```sh
+sudo bash -c "$(curl -fsSL https://github.com/EXT-IT/php2shell-check/releases/latest/download/php2shell-check.sh)" - https://your-site.example
+```
+
+On a Windows server, in an elevated PowerShell:
+
+```powershell
+[Net.ServicePointManager]::SecurityProtocol = 'Tls12'; $f = "$env:TEMP\p2s.ps1"; irm https://github.com/EXT-IT/php2shell-check/releases/latest/download/php2shell-check.ps1 -OutFile $f; & $f https://your-site.example; del $f
+```
+
+Replace `https://your-site.example` with your website, several separated by
+spaces, or leave it out to check only the server. Both commands download the
+whole script first, run it, and leave no file behind. The link always points at
+the latest release, so it never changes.
+
+Without root it still runs, but it cannot see containers or other users'
+processes and says so in the output. Checking only websites is useful for a
+quick overview of a fleet, but it never replaces a run on each server.
+
+<details>
+<summary>Read it first, or verify its checksum</summary>
+
+Want to read the script first, or check it against its SHA-256 sum? Download
+the latest release and run it step by step:
+
+```sh
+curl -fsSLO https://github.com/EXT-IT/php2shell-check/releases/latest/download/php2shell-check.sh
+curl -fsSLO https://github.com/EXT-IT/php2shell-check/releases/latest/download/SHA256SUMS
+sha256sum -c SHA256SUMS          # macOS: shasum -a 256 -c SHA256SUMS
+less php2shell-check.sh
+sudo bash php2shell-check.sh https://your-site.example
+```
+
+Without root it still runs, but it cannot see containers or other users'
+processes and says so in the output. Checking only websites is useful for a
+quick overview of a fleet, but it never replaces a run on each server.
+
+</details>
+
+Only a website, from any computer and without root:
+
+```sh
+bash -c "$(curl -fsSL https://github.com/EXT-IT/php2shell-check/releases/latest/download/php2shell-check.sh)" - --remote-only https://your-site.example
+```
+
+```powershell
+[Net.ServicePointManager]::SecurityProtocol = 'Tls12'; $f = "$env:TEMP\p2s.ps1"; irm https://github.com/EXT-IT/php2shell-check/releases/latest/download/php2shell-check.ps1 -OutFile $f; & $f -RemoteOnly https://your-site.example; del $f
+```
+
+## What the answer is worth
+
+**Run it on the server.** That is the only way to get a definite answer. There
+it reads the real versions of every installation, every container and every FPM
+pool. From outside it sees only what a site puts in its headers, which on most
+sites is nothing — and the script never turns that silence into a clean result.
+A site whose patch level it cannot determine comes back **undecided**, never as
+"not vulnerable". Every run ends with a block that says which of the two it
+was.
+
+Exit codes: `0` nothing vulnerable found, `1` vulnerable, `2` could not decide,
+`3` usage error. Warnings (missing mitigations, version disclosure) do not
+change the exit code.
+
+A verdict covers what the script can see. The folded sections below have the
+details; the short version is that silence is never counted as clean, a
+distribution fix table goes stale within days, and a mitigation is not a patch.
+
+<details>
+<summary>Why a run can end in 2 where it used to end in 0</summary>
+
+`0` is reserved for a run that actually judged a PHP runtime and found all of
+them patched. Three cases that used to end in `0` now end in `2`, because
+"nothing to report" and "nothing examined" are not the same answer:
+
+- a run that judged no PHP at all — no PHP in the known paths, none in the
+  process list, or the local checks could not run on this platform
+- a website whose header announces a patched version: `X-Powered-By` is
+  self-declared and can be set by the application, a cache or a proxy with a
+  different PHP behind it
+- a package below the upstream fix on an RPM distribution whose changelog does
+  not name the CVE
+
+A version *below* the fix is still `1`, from a header too: if that header
+lies, it only costs a look.
+
+</details>
+
+| Option | Effect |
+|---|---|
+| `-r`, `--remote-only` | only check the URLs; no root needed, works on macOS. At most 10 URLs per run, no address ranges |
+| `--origin IP` | also try to reach each site directly at `IP`, past the proxy |
+| `--no-containers` | skip Docker and Podman |
+| `--no-logs` | skip the log scan |
+| `--json` | one JSON object on stdout, for monitoring and fleet runs |
+| `--no-color`, `-q` | plain output; summary only |
+
+<details>
+<summary><b>Example output</b> — one Linux host, one Windows host</summary>
 
 ```console
 $ sudo ./php2shell-check.sh https://www.example.com
@@ -65,90 +157,10 @@ How reliable this is
   from the system itself. That is the definite answer for this server.
 ```
 
-## Run it
-
-On your server:
-
-```sh
-sudo bash -c "$(curl -fsSL https://github.com/EXT-IT/php2shell-check/releases/latest/download/php2shell-check.sh)" - https://your-site.example
-```
-
-Replace `https://your-site.example` with your website. Several sites go one
-after the other, separated by spaces. Leave the URL out to check only the
-server.
-
-Only a website, from any computer including a Mac (no `sudo` needed):
-
-```sh
-bash -c "$(curl -fsSL https://github.com/EXT-IT/php2shell-check/releases/latest/download/php2shell-check.sh)" - --remote-only https://your-site.example
-```
-
-The command downloads the script completely before it runs and leaves no
-file behind. The link always points to the latest release, so it never
-changes.
-
-Want to read the script first, or check it against its SHA-256 sum? Download
-the latest release and run it step by step:
-
-```sh
-curl -fsSLO https://github.com/EXT-IT/php2shell-check/releases/latest/download/php2shell-check.sh
-curl -fsSLO https://github.com/EXT-IT/php2shell-check/releases/latest/download/SHA256SUMS
-sha256sum -c SHA256SUMS          # macOS: shasum -a 256 -c SHA256SUMS
-less php2shell-check.sh
-sudo bash php2shell-check.sh https://your-site.example
-```
-
-Without root it still runs, but it cannot see containers or other users'
-processes and says so in the output. Checking only websites is useful for a
-quick overview of a fleet, but it never replaces a run on each server.
-
-| Option | Effect |
-|---|---|
-| `-r`, `--remote-only` | only check the URLs; no root needed, works on macOS. At most 10 URLs per run, no address ranges |
-| `--origin IP` | also try to reach each site directly at `IP`, past the proxy |
-| `--no-containers` | skip Docker and Podman |
-| `--no-logs` | skip the log scan |
-| `--json` | one JSON object on stdout, for monitoring and fleet runs |
-| `--no-color`, `-q` | plain output; summary only |
-
-Exit codes: `0` nothing vulnerable found, `1` vulnerable, `2` could not decide,
-`3` usage error. Warnings (missing mitigations, version disclosure) do not
-change the exit code.
-
-`0` is reserved for a run that actually judged a PHP runtime and found all of
-them patched. Three cases that used to end in `0` now end in `2`, because
-"nothing to report" and "nothing examined" are not the same answer:
-
-- a run that judged no PHP at all — no PHP in the known paths, none in the
-  process list, or the local checks could not run on this platform
-- a website whose header announces a patched version: `X-Powered-By` is
-  self-declared and can be set by the application, a cache or a proxy with a
-  different PHP behind it
-- a package below the upstream fix on an RPM distribution whose changelog does
-  not name the CVE
-
-A version *below* the fix is still `1`, from a header too: if that header
-lies, it only costs a look.
-
-## Windows servers
-
-Skip this if you run no Windows server.
-
-On Windows the version number is the answer. The php.net builds carry the real
-upstream version, there is no distribution that backports a fix behind an
-unchanged number, and so `php.exe` reporting 8.3.35 means 8.3.35 and nothing
-else. That is why Windows has its own script instead of a flag: none of the
-package-database machinery that the shell version needs applies, and all of
-the IIS machinery it does need has no counterpart on Linux.
-
-```console
-PS> powershell -ExecutionPolicy Bypass -File php2shell-check.ps1 https://www.example.com
-```
-
-A run on a server that has both versions unpacked and IIS pointing at the new
-one, with the website check left out. Two sites are configured there, which is
-why the `sapi` check answers twice and three FastCGI pools show up — one line
-per handler, not one per host:
+A Windows server with both versions unpacked and IIS pointing at the new one,
+with the website check left out. Two sites are configured there, which is why
+the `sapi` check answers twice and three FastCGI pools show up — one line per
+handler, not one per host:
 
 ```console
 php2shell-check 2.1.0  CVE-2026-109618 / CVE-2026-109619, data as of 2026-10-22
@@ -203,56 +215,10 @@ How reliable this is
   application pool after every PHP update.
 ```
 
-Run it in an elevated PowerShell. It needs Windows PowerShell 5.1, which every
-Windows Server since 2016 has without an installation, and runs under
-PowerShell 7 as well. The exit codes are the ones above, and the options come
-in both spellings — `-RemoteOnly` and `--remote-only` do the same thing — so
-one fleet script can call this on Windows and the shell version everywhere
-else. Two differences: `--no-containers` and `--no-logs` are accepted and do
-nothing, because neither check exists here, and `--origin` does not exist at
-all. It ends in a usage error rather than silently treating the address you
-passed as another website to check.
+</details>
 
-| Check | What it looks at |
-|---|---|
-| `php-binary` | every `php.exe`, `php-cgi.exe` and `php*.dll` under the paths the Windows installers use: Chocolatey (`C:\tools\php*`), Scoop, WinGet, XAMPP, WampServer, Laragon, EasyPHP, Plesk, Zend Server, plus a scan of every fixed drive. Judged by the version resource in the file, not by its path or its name |
-| `iis` | which binary actually serves `.php`, read out of `applicationHost.config`: the FastCGI entries, the handler mappings including the `scriptProcessor` form that packs two paths into one pipe-separated string, and `instanceMaxRequests` |
-| `process` | PHP that is running now. The version comes from the file on disk, so an application pool still serving the old `php-cgi.exe` after an update is visible — which is the usual state of a Windows server an hour after someone unpacked the new PHP |
-| `stale-evidence` | a PHP DLL that was renamed out of the way but is still loaded, and a rename queued in `PendingFileRenameOperations`, meaning the update finishes at the next reboot and not before |
-| `ini`, `mitigation` | the temporary measures from the advisory, read out of every `php.ini` it can find: next to each binary (`php-cgi.ini` before `php.ini`, because that is the order PHP itself uses), `phpForApache.ini` for WampServer, the path in `HKLM\SOFTWARE\PHP`, `PHPRC`, and the Windows directory |
-| `remote` | the URL checks, identical to the shell version |
-
-What it does not do, measured on Windows Server 2022 with IIS 10 on
-2026-10-22:
-
-- **File timestamps are not evidence on NTFS and are not used.** NTFS tunneling
-  hands a replaced file the creation time of the one it replaced, so a `php.exe`
-  put there ten minutes ago can carry a creation date from last year. The
-  verdict comes from the version resource only. A build whose resource is empty
-  — a self-compiled binary, a repacked bundle — is *undecided*, never clean.
-- **Without Administrator rights the IIS part is missing.** `applicationHost.config`
-  is readable by SYSTEM and the Administrators group, nothing else, so an
-  unelevated run finds the installations but cannot say which one answers a
-  request. It says so instead of leaving the gap open.
-- **Only IIS is read.** Apache and nginx on Windows serve PHP through their own
-  configuration, and the script does not parse it. Their binaries are still
-  found and judged; what is missing is the link from a site to a binary.
-- **It never starts a PHP binary.** Every version comes out of the file's
-  version resource and every setting out of an ini file on disk. That keeps the
-  script harmless on a production server, and it means a setting that only the
-  running process knows — a compiled-in default, something an application sets
-  at runtime — stays invisible. `php --ini` on the host is the way to see which
-  file actually wins.
-- Windows Server 2022 and IIS 10 are what this was measured against. 2016,
-  2019 and 2025 use the same interfaces and are expected to work; nobody has
-  run it there yet.
-
-The two scripts carry the same table of fixed versions, and that is the one
-thing neither of them can check by running: a Windows run never reads the
-shell table, a Linux run never reads the PowerShell one. So `tests/data_parity.py`
-compares them and fails on the first number that drifts apart.
-
-## What it checks
+<details>
+<summary><b>What it checks</b> — every check, on the server and for each URL</summary>
 
 On the server:
 
@@ -283,7 +249,31 @@ For each URL:
 | `redirect` | a redirect to another host. It is reported and not followed, so the script only ever talks to the host you named (or its `www.` variant) |
 | `origin` | with `--origin`, whether the server answers directly. If it does, anyone who finds the IP can go around the WAF |
 
-## What it cannot tell you
+### Windows servers
+
+The Windows edition is a separate script, `php2shell-check.ps1`, because none
+of the package-database machinery applies there and all of the IIS machinery
+has no counterpart on Linux. It needs Windows PowerShell 5.1, which every
+Windows Server since 2016 has without an installation, and runs under
+PowerShell 7 as well. The exit codes are the same, and the options come in both
+spellings — `-RemoteOnly` and `--remote-only` do the same thing — so one fleet
+script can call either. `--no-containers` and `--no-logs` are accepted and do
+nothing; `--origin` does not exist there and ends in a usage error rather than
+being treated as another website to check.
+
+| Check | What it looks at |
+|---|---|
+| `php-binary` | every `php.exe`, `php-cgi.exe` and `php*.dll` under the paths the Windows installers use: Chocolatey (`C:\tools\php*`), Scoop, WinGet, XAMPP, WampServer, Laragon, EasyPHP, Plesk, Zend Server, plus a scan of every fixed drive. Judged by the version resource in the file, not by its path or its name |
+| `iis` | which binary actually serves `.php`, read out of `applicationHost.config`: the FastCGI entries, the handler mappings including the `scriptProcessor` form that packs two paths into one pipe-separated string, and `instanceMaxRequests` |
+| `process` | PHP that is running now. The version comes from the file on disk, so an application pool still serving the old `php-cgi.exe` after an update is visible — which is the usual state of a Windows server an hour after someone unpacked the new PHP |
+| `stale-evidence` | a PHP DLL that was renamed out of the way but is still loaded, and a rename queued in `PendingFileRenameOperations`, meaning the update finishes at the next reboot and not before |
+| `ini`, `mitigation` | the temporary measures from the advisory, read out of every `php.ini` it can find: next to each binary (`php-cgi.ini` before `php.ini`, because that is the order PHP itself uses), `phpForApache.ini` for WampServer, the path in `HKLM\SOFTWARE\PHP`, `PHPRC`, and the Windows directory |
+| `remote` | the URL checks, identical to the shell version |
+
+</details>
+
+<details>
+<summary><b>What it cannot tell you</b> — read this before trusting a green result</summary>
 
 Read this section even if you skip the rest.
 
@@ -403,7 +393,44 @@ make an installation safe", so a host with every readable measure in place is
 reported as *info*: counted nowhere, no effect on the exit code. A mitigation
 is not a patch.
 
-## Keeping the data current
+### On Windows
+
+What it does not do, measured on Windows Server 2022 with IIS 10 on
+2026-10-22:
+
+- **File timestamps are not evidence on NTFS and are not used.** NTFS tunneling
+  hands a replaced file the creation time of the one it replaced, so a `php.exe`
+  put there ten minutes ago can carry a creation date from last year. The
+  verdict comes from the version resource only. A build whose resource is empty
+  — a self-compiled binary, a repacked bundle — is *undecided*, never clean.
+- **Without Administrator rights the IIS part is missing.** `applicationHost.config`
+  is readable by SYSTEM and the Administrators group, nothing else, so an
+  unelevated run finds the installations but cannot say which one answers a
+  request. It says so instead of leaving the gap open.
+- **Only IIS is read.** Apache and nginx on Windows serve PHP through their own
+  configuration, and the script does not parse it. Their binaries are still
+  found and judged; what is missing is the link from a site to a binary.
+- **It never starts a PHP binary.** Every version comes out of the file's
+  version resource and every setting out of an ini file on disk. That keeps the
+  script harmless on a production server, and it means a setting that only the
+  running process knows — a compiled-in default, something an application sets
+  at runtime — stays invisible. `php --ini` on the host is the way to see which
+  file actually wins.
+- Windows Server 2022 and IIS 10 are what this was measured against. 2016,
+  2019 and 2025 use the same interfaces and are expected to work; nobody has
+  run it there yet.
+
+The two scripts carry the same table of fixed versions, and that is the one
+thing neither of them can check by running: a Windows run never reads the
+shell table, a Linux run never reads the PowerShell one. So `tests/data_parity.py`
+compares them and fails on the first number that drifts apart.
+
+</details>
+
+<details>
+<summary><b>Keeping the data current, and the tests</b></summary>
+
+### Keeping the data current
 
 Everything that decides a verdict sits in three short functions at the top of
 the script: `_p2s_upstream_fixed`, `_p2s_distro_fixed` and the list of frozen
@@ -430,6 +457,8 @@ CI runs the shell tests on Ubuntu 22.04 and 24.04, Debian 12 and 13, Rocky
 Linux 9, Alpine and macOS (bash 3.2), the PowerShell tests on Windows in both
 5.1 and 7, the parity check on every push, and verifies `SHA256SUMS` against
 both scripts.
+
+</details>
 
 ## Background
 
