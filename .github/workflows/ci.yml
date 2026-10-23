@@ -46,8 +46,14 @@ jobs:
       - name: yamllint
         run: yamllint --strict .
 
-      - name: SHA256SUMS matches the script
+      - name: SHA256SUMS matches both editions
         run: sha256sum -c SHA256SUMS
+
+      # Two files carrying the same vulnerability table is the one thing that
+      # no run of either file can catch: a Linux run never reads the
+      # PowerShell table, a Windows run never reads the shell one.
+      - name: Vulnerability data parity (shell vs PowerShell)
+        run: python3 tests/data_parity.py
 
   test-linux:
     name: Tests (${{ matrix.image }})
@@ -91,3 +97,46 @@ jobs:
 
       - name: Run tests with the system bash
         run: /bin/bash tests/run_tests.sh
+
+  test-windows:
+    name: Tests (Windows, ${{ matrix.shell }})
+    runs-on: windows-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # powershell is Windows PowerShell 5.1, the one every Windows Server
+        # has without an installation; pwsh is PowerShell 7, which many
+        # administrators run instead. The script targets 5.1 and must not
+        # break on 7.
+        shell: [powershell, pwsh]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+
+      - name: Show the host and the shell
+        shell: ${{ matrix.shell }}
+        run: |
+          $PSVersionTable.PSVersion.ToString()
+          (Get-CimInstance Win32_OperatingSystem).Caption
+
+      # Errors only. Measured with PSScriptAnalyzer 1.25.0: zero errors, and
+      # the warnings are all deliberate for a console tool run by hand --
+      # PSAvoidUsingWriteHost (that is the output), PSUseApprovedVerbs (the
+      # test helpers), PSAvoidUsingEmptyCatchBlock (a missing key or file is
+      # "nothing there", not a failure), plus two false positives:
+      # PSReviewUnusedParameter on $TestRoot, which the functions read from
+      # script scope, and PSUseUsingScopeModifierInNewRunspaces on a job that
+      # takes its value through -ArgumentList.
+      # -Path takes one string, not a list, so the whole tree is scanned.
+      - name: PSScriptAnalyzer
+        shell: ${{ matrix.shell }}
+        run: |
+          Install-Module PSScriptAnalyzer -Force -Scope CurrentUser -SkipPublisherCheck -AllowClobber
+          $f = Invoke-ScriptAnalyzer -Path . -Recurse -Severity Error
+          $f | Format-Table -AutoSize | Out-String
+          if ($f) { exit 1 }
+
+      - name: Run tests
+        shell: ${{ matrix.shell }}
+        run: ./tests/run_tests.ps1
