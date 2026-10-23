@@ -8,6 +8,19 @@ Changes to the vulnerability data (fixed versions, distribution packages) are
 listed separately from code changes, because they change verdicts without
 changing behaviour.
 
+## [3.1.1] - 2026-10-23
+
+### Changed
+
+- **A run whose only open point is a patched-looking banner says so in its
+  headline.** It used to read "UNDECIDED some results could not be judged, see
+  the ?? lines", which sounds like a problem on a site where nothing suspicious
+  was found at all. Where every undecided line is a site announcing a version
+  above the fix, the headline now says that: nothing vulnerable found, every
+  site announces a version that carries the fix, and a header cannot prove it.
+  The exit code is unchanged at 2 — the header is set by whoever answers, and a
+  pipeline that reads 0 as "done" would never run the check that settles it.
+
 ## [3.1.0] - 2026-10-23
 
 ### Fixed
