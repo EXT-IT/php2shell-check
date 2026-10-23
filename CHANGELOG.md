@@ -8,6 +8,18 @@ Changes to the vulnerability data (fixed versions, distribution packages) are
 listed separately from code changes, because they change verdicts without
 changing behaviour.
 
+## [3.0.1] - 2026-10-23
+
+### Fixed
+
+- **On every busybox host, an unreadable Apache `maps` file fell back to
+  `ok`** — the case 3.0.0 was released to close. The check told "no match"
+  from "could not read" by grep's exit code, and that code is not portable:
+  measured on `alpine:3.20`, busybox grep answers 1 for an unreadable path
+  where GNU grep answers 2. Readability is now decided before grep runs, with
+  `head -c 1`, which fails for an unreadable file and for a directory alike.
+  Caught by the Alpine job of the test matrix.
+
 ## [3.0.0] - 2026-10-23
 
 One contributed fix, and it changes an exit code the same way 2.0.0 did, which

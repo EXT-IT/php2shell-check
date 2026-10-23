@@ -16,7 +16,7 @@
 set -u
 export LC_ALL=C
 
-P2S_SCRIPT_VERSION='3.0.0'
+P2S_SCRIPT_VERSION='3.0.1'
 P2S_DATA_DATE='2026-10-22'
 P2S_ADVISORY='GHSA-w8hw-w9fx-j79w'
 P2S_ADVISORY_URL='https://github.com/php/php-src/security/advisories/GHSA-w8hw-w9fx-j79w'
@@ -1374,7 +1374,7 @@ if command -v frankenphp >/dev/null 2>&1; then echo frankenphp; fi' 2>/dev/null 
 }
 
 _p2s_check_stale_processes() {
-    local _p _exe _name _comm _state _rc _stale='' _unreadable=0
+    local _p _exe _name _comm _state _stale='' _unreadable=0
     [ -d "$_p2s_proc" ] && [ "$(id -u)" -eq 0 ] || return 0
     for _p in "$_p2s_proc"/[0-9]*; do
         [ -d "$_p" ] || continue
@@ -1394,13 +1394,18 @@ _p2s_check_stale_processes() {
             *php*' (deleted)')
                 _name=$(basename "${_exe% (deleted)}" | _p2s_clean 40) ;;
             *apache2|*httpd)
-                grep -q 'libphp.*(deleted)' "$_p/maps" 2>/dev/null
-                _rc=$?
-                case "$_rc" in
-                    0) _name="$(basename "$_exe" | _p2s_clean 40) (mod_php)" ;;
-                    1) continue ;;
-                    *) [ -d "$_p" ] && _unreadable=$(( _unreadable + 1 )); continue ;;
-                esac ;;
+                # Whether the file could be read at all has to be decided
+                # before grep runs: grep's exit code does not tell "no match"
+                # from "could not read" across implementations. Measured on
+                # alpine:3.20, busybox grep answers 1 for a directory where
+                # GNU grep answers 2, so the unreadable case fell back to ok
+                # on every busybox host. head -c 1 fails for both.
+                if ! head -c 1 "$_p/maps" >/dev/null 2>&1; then
+                    [ -d "$_p" ] && _unreadable=$(( _unreadable + 1 ))
+                    continue
+                fi
+                grep -q 'libphp.*(deleted)' "$_p/maps" 2>/dev/null || continue
+                _name="$(basename "$_exe" | _p2s_clean 40) (mod_php)" ;;
             *) continue ;;
         esac
         case "$_stale" in *" $_name"*) ;; *) _stale="$_stale $_name" ;; esac
