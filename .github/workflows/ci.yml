@@ -142,23 +142,31 @@ jobs:
           $f | Format-Table -AutoSize | Out-String
           if ($f) { exit 1 }
 
-      # The log of a run is not readable without a token, so every failing case
-      # is repeated as an annotation, which the API serves for a public
-      # repository. Without this a red Windows job says only "failure".
+      # Two things fight this step. GitHub's PowerShell wrapper sets
+      # $ErrorActionPreference to Stop, so a single error record anywhere in
+      # the pipeline ends the step before anything can be reported; and the log
+      # of a run is not readable without a token, so a red job would otherwise
+      # say "failure" and nothing else. The run therefore writes every stream
+      # into a file, and the failing cases are repeated as annotations, which
+      # the API serves for a public repository.
       - name: Run tests
         run: |
-          $out = & ./tests/run_tests.ps1 2>&1 | Out-String
+          $ErrorActionPreference = 'Continue'
+          ./tests/run_tests.ps1 *> windows-tests.log
           $rc = $LASTEXITCODE
-          $out
-          $lines = $out -split "`r?`n"
-          for ($i = 0; $i -lt $lines.Count; $i++) {
-            if ($lines[$i] -match '^\s*(FAIL|skip)' -or $lines[$i] -match 'passed, \d+ failed') {
+          Get-Content windows-tests.log
+          if ($rc -ne 0) {
+            $lines = @(Get-Content windows-tests.log)
+            $sent = 0
+            for ($i = 0; $i -lt $lines.Count; $i++) {
+              if ($lines[$i] -notmatch '^\s*(FAIL|skip)' -and $lines[$i] -notmatch 'passed, \d+ failed') { continue }
+              if ($sent -ge 9) { break }
               $block = @($lines[$i])
-              for ($j = $i + 1; $j -lt [Math]::Min($i + 6, $lines.Count); $j++) {
+              for ($j = $i + 1; $j -lt [Math]::Min($i + 8, $lines.Count); $j++) {
                 if ($lines[$j] -match '^\s{6,}\S') { $block += $lines[$j] } else { break }
               }
-              $msg = ($block -join '%0A') -replace '::', ' '
-              Write-Host ("::error::" + $msg)
+              Write-Host ("::error::" + (($block -join '%0A') -replace '::', ' '))
+              $sent++
             }
           }
           exit $rc
