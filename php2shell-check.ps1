@@ -139,6 +139,17 @@ function Write-Tinted {
     else { Write-Host $Text -ForegroundColor $Colour }
 }
 
+function Sort-Ordinal {
+    param([Parameter(ValueFromPipeline = $true)] [string[]] $Value)
+    begin { $all = New-Object System.Collections.ArrayList }
+    process { foreach ($v in $Value) { if ($null -ne $v -and -not $all.Contains($v)) { $null = $all.Add($v) } } }
+    end {
+        $arr = [string[]] $all.ToArray()
+        [Array]::Sort($arr, [StringComparer]::OrdinalIgnoreCase)
+        return $arr
+    }
+}
+
 function Add-Finding {
     param(
         [ValidateSet('vuln', 'unknown', 'warn', 'ok', 'info')] [string] $Status,
@@ -402,7 +413,7 @@ function Get-PhpDirectoryCandidates {
             }
         } catch { }
     }
-    return ($dirs | Sort-Object -Unique)
+    return ($dirs | Sort-Ordinal)
 }
 
 $script:PhpFileNames = @('php.exe', 'php-cgi.exe', 'php-win.exe', 'phpdbg.exe')
@@ -538,7 +549,7 @@ function Invoke-BinaryCheck {
     # the same thing. Grouped by directory AND version, so a directory that
     # really holds two versions still shows both.
     $groups = @{}
-    foreach ($p in ($paths | Sort-Object -Unique)) {
+    foreach ($p in ($paths | Sort-Ordinal)) {
         if (-not $p -or $seen[$p.ToLowerInvariant()]) { continue }
         $seen[$p.ToLowerInvariant()] = $true
         if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { continue }
@@ -556,10 +567,10 @@ function Invoke-BinaryCheck {
         $null = $Judged.Add($p)
     }
 
-    foreach ($g in ($groups.Values | Sort-Object { $_.Dir })) {
+    foreach ($g in ($groups.Values | Sort-Object { $_.Dir.ToLowerInvariant() })) {
         $found++
         $target = Show-PathForReport (Get-RealCasePath $g.Dir)
-        $files = (($g.Files | Sort-Object -Unique) -join ', ')
+        $files = (($g.Files | Sort-Ordinal) -join ', ')
         if (-not $g.Info) {
             Add-Finding -Status unknown -Check php-binary -Target $target `
                 -Detail ('the files here carry no readable version resource, so the patch level cannot be read ({0})' -f $files) `
@@ -687,7 +698,7 @@ function Invoke-StaleEvidenceCheck {
     if ($hits.Count -eq 0) { return }
 
     Write-Section 'Traces of an in-place replacement'
-    foreach ($h in ($hits | Sort-Object -Unique)) {
+    foreach ($h in ($hits | Sort-Ordinal)) {
         Add-Finding -Status warn -Check stale-trace -Target (Show-PathForReport $h) `
             -Detail 'a PHP library was replaced under a new name, which is how a loaded DLL is swapped on Windows: processes started before that still run the old code' `
             -Hint 'Recycle every FastCGI application and application pool, then remove the leftover file'
@@ -1040,6 +1051,15 @@ function Invoke-RemoteCheck {
 # Entry point
 # ---------------------------------------------------------------------------
 
+function Write-UsageError {
+    param([string] $Message)
+    # Deliberately not the Write-Error cmdlet: it wraps at the console width
+    # and wraps the message in a "powershell.EXE : ... + CategoryInfo" block.
+    # Measured on a GitHub runner, where that wrap cut the sentence in half. A
+    # command line tool says one line on stderr, like the shell edition.
+    [Console]::Error.WriteLine('php2shell-check: ' + $Message)
+}
+
 function Show-Help {
     @"
 php2shell-check $script:P2sScriptVersion - read-only exposure check for
@@ -1103,11 +1123,11 @@ foreach ($a in @($Url)) {
         # --origin needs a value, and silently dropping it would turn the
         # address into a target. The check does not exist here, so say so.
         '^--origin$' {
-            Write-Error 'the --origin check is not part of the Windows edition'
+            Write-UsageError 'the --origin check is not part of the Windows edition'
             exit 3
         }
         '^-' {
-            Write-Error ('unknown option: {0}' -f $a)
+            Write-UsageError ('unknown option: {0}' -f $a)
             exit 3
         }
         default { $null = $targets.Add($a) }
@@ -1119,7 +1139,7 @@ if ($NoColor) { $script:NoColour = $true }
 if ($Help) { Show-Help; exit 0 }
 if ($Version) { "php2shell-check $script:P2sScriptVersion (vulnerability data as of $script:P2sDataDate)"; exit 0 }
 if ($RemoteOnly -and -not $Url) {
-    Write-Error 'need at least one URL with -RemoteOnly'
+    Write-UsageError 'need at least one URL with -RemoteOnly'
     exit 3
 }
 

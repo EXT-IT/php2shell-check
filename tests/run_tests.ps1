@@ -316,7 +316,7 @@ $r = New-FakeRoot 'vuln'
 New-FakePhp (Join-Path $r 'PHP') '8.3.35'
 T-Run 'a vulnerable installation is reported' 1 'VULN\]\s+php-binary' @('-NoRemote', '-TestRoot', $r)
 T-Run 'and it names the fixed release' 1 'fixed in 8\.3\.36' @('-NoRemote', '-TestRoot', $r)
-T-Run 'and one line covers the whole directory' 1 'php\.exe, php-cgi\.exe' @('-NoRemote', '-TestRoot', $r)
+T-Run 'and one line covers the whole directory' 1 'php-cgi\.exe, php\.exe' @('-NoRemote', '-TestRoot', $r)
 
 $r = New-FakeRoot 'fixed'
 New-FakePhp (Join-Path $r 'PHP') '8.3.36'
