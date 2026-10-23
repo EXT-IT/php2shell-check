@@ -141,10 +141,16 @@ if command -v python3 >/dev/null 2>&1 && command -v curl >/dev/null 2>&1; then
     # found", while the same output said it cannot confirm a patch level.
     _t_run 'banner 8.3.36 is undecided'    2 '\?\? \] php-banner'  bash "$_t_script" -r --no-color "$_t_base/fixed"
     _t_run 'and says a header is self-declared' 2 'self-declared' bash "$_t_script" -r --no-color "$_t_base/fixed"
+    _t_run 'and the summary credits the announced fix' 2 'already carries the fix' bash "$_t_script" -r --no-color "$_t_base/fixed"
     _t_run 'frozen distro banner is undecided' 2 'cannot be judged' bash "$_t_script" -r --no-color "$_t_base/distro"
     _t_run 'EOL banner is vulnerable'      1 'no fixed release'    bash "$_t_script" -r --no-color "$_t_base/eol"
     _t_run 'version disclosure warns'      1 'WARN\] disclosure'   bash "$_t_script" -r --no-color "$_t_base/vulnerable"
-    _t_run 'Cloudflare headers detected'   2 'OK \] waf'           bash "$_t_script" -r --no-color "$_t_base/cloudflare"
+    # The fixture answers with cf-ray from 127.0.0.1, which is not a
+    # Cloudflare address -- so this is the "headers say Cloudflare, DNS says
+    # otherwise" case. It used to assert OK, which baked in the bug: the
+    # headers can come from a cache in front of an unproxied host.
+    _t_run 'Cloudflare headers with non-CF DNS warn' 2 'WARN\] waf'  bash "$_t_script" -r --no-color "$_t_base/cloudflare"
+    _t_run 'and it names the unproxied host'  2 'not proxied'         bash "$_t_script" -r --no-color "$_t_base/cloudflare"
     _t_run 'Sucuri detected'               2 'behind Sucuri'       bash "$_t_script" -r --no-color "$_t_base/sucuri"
     _t_run 'LiteSpeed noted'               2 'LSAPI'               bash "$_t_script" -r --no-color "$_t_base/litespeed"
     _t_run 'no WAF reported'               2 'no WAF or CDN'       bash "$_t_script" -r --no-color "$_t_base/plain"

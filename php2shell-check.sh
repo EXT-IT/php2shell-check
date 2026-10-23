@@ -1700,6 +1700,7 @@ _p2s_check_url() {
                         # reads the exit code. A version BELOW the fix stays a
                         # finding: if that header lies, it only costs a look.
                         _p2s_urls_open=$(( _p2s_urls_open + 1 ))
+                        _p2s_urls_patched=$(( _p2s_urls_patched + 1 ))
                         _p2s_add unknown php-banner "$_url" "announces PHP $_phpv, which is patched — but a header is self-declared and can be set by the application, a cache or a proxy, so this does not confirm what runs behind it" \
                             'Run this script on the server itself: there the package version gives a definite answer' ;;
                     *)
@@ -1821,6 +1822,7 @@ fi
 _p2s_behind_cf=0
 _p2s_urls_seen=0
 _p2s_urls_open=0
+_p2s_urls_patched=0
 _p2s_local_ran=0
 _found_ct=0
 _p2s_hostname=$( (hostname -f 2>/dev/null || hostname) | _p2s_clean 80)
@@ -1909,9 +1911,9 @@ fi
 if [ "$_opt_json" -eq 1 ]; then
     printf '{"tool":"php2shell-check","version":"%s","data_as_of":"%s","advisory":"%s",' "$P2S_SCRIPT_VERSION" "$P2S_DATA_DATE" "$P2S_ADVISORY"
     printf '"host":"%s","os":"%s","result":"%s",' "$(_p2s_json_esc "$_p2s_hostname")" "$(_p2s_json_esc "$_p2s_os")" "$_p2s_result"
-    printf '"scope":{"host_checked":%s,"as_root":%s,"urls_checked":%d,"urls_undecided":%d},' \
+    printf '"scope":{"host_checked":%s,"as_root":%s,"urls_checked":%d,"urls_undecided":%d,"urls_announcing_patched":%d},' \
         "$( [ "$_p2s_local_ran" -eq 1 ] && echo true || echo false )" \
-        "$( [ "$(id -u)" -eq 0 ] && echo true || echo false )" "$_p2s_urls_seen" "$_p2s_urls_open"
+        "$( [ "$(id -u)" -eq 0 ] && echo true || echo false )" "$_p2s_urls_seen" "$_p2s_urls_open" "$_p2s_urls_patched"
     printf '"counts":{"vulnerable":%d,"undecided":%d,"warning":%d,"ok":%d},"findings":[' "$_n_vuln" "$_n_unknown" "$_n_warn" "$_n_ok"
     _i=0
     while [ "$_i" -lt "${#_f_status[@]}" ]; do
@@ -1954,6 +1956,13 @@ else
 fi
 if [ "$_p2s_urls_seen" -gt 0 ] && [ "$_p2s_urls_open" -gt 0 ]; then
     printf '  %d of %d websites could not be judged from outside.\n' "$_p2s_urls_open" "$_p2s_urls_seen"
+fi
+# The good news belongs in the summary too. The verdict stays undecided,
+# because the header is set by whoever answers -- but a reader who sees only
+# "undecided" learns nothing about the number that was actually announced.
+if [ "$_p2s_urls_patched" -gt 0 ]; then
+    printf '  %d of them announced a version that already carries the fix. That is a\n' "$_p2s_urls_patched"
+    printf '  good sign, not proof: the header is set by whoever answers the request.\n'
 fi
 _p2s_hints="$_p2s_hints_1$_p2s_hints_2$_p2s_hints_3"
 if [ -n "$_p2s_hints" ]; then
