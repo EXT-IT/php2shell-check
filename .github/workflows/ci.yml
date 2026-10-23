@@ -142,5 +142,23 @@ jobs:
           $f | Format-Table -AutoSize | Out-String
           if ($f) { exit 1 }
 
+      # The log of a run is not readable without a token, so every failing case
+      # is repeated as an annotation, which the API serves for a public
+      # repository. Without this a red Windows job says only "failure".
       - name: Run tests
-        run: ./tests/run_tests.ps1
+        run: |
+          $out = & ./tests/run_tests.ps1 2>&1 | Out-String
+          $rc = $LASTEXITCODE
+          $out
+          $lines = $out -split "`r?`n"
+          for ($i = 0; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -match '^\s*(FAIL|skip)' -or $lines[$i] -match 'passed, \d+ failed') {
+              $block = @($lines[$i])
+              for ($j = $i + 1; $j -lt [Math]::Min($i + 6, $lines.Count); $j++) {
+                if ($lines[$j] -match '^\s{6,}\S') { $block += $lines[$j] } else { break }
+              }
+              $msg = ($block -join '%0A') -replace '::', ' '
+              Write-Host ("::error::" + $msg)
+            }
+          }
+          exit $rc
