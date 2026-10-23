@@ -16,7 +16,7 @@
 set -u
 export LC_ALL=C
 
-P2S_SCRIPT_VERSION='3.1.0'
+P2S_SCRIPT_VERSION='3.1.1'
 P2S_DATA_DATE='2026-10-22'
 P2S_ADVISORY='GHSA-w8hw-w9fx-j79w'
 P2S_ADVISORY_URL='https://github.com/php/php-src/security/advisories/GHSA-w8hw-w9fx-j79w'
@@ -1933,6 +1933,14 @@ case "$_p2s_result" in
         if [ "$_n_judged" -eq 0 ]; then
             printf '  %sUNDECIDED%s   this run judged no PHP runtime at all, so it says nothing\n' "$_c_yel" "$_c_off"
             printf '              about this host. See the lines above for what stopped it.\n'
+        elif [ "$_p2s_urls_patched" -gt 0 ] && [ "$_p2s_urls_patched" -eq "$_n_unknown" ]; then
+            # Every open point is a site that announces a version above the
+            # fix. Nothing suspicious was found, and saying "some results
+            # could not be judged" reads like a problem where there is none.
+            # The exit code stays 2: a header is set by whoever answers, and a
+            # pipeline that reads 0 as "done" would never run the real check.
+            printf '  %sUNDECIDED%s   nothing vulnerable found. Every site announces a version that\n' "$_c_yel" "$_c_off"
+            printf '              carries the fix, which a header cannot prove — see below.\n'
         else
             printf '  %sUNDECIDED%s   some results could not be judged, see the ?? lines.\n' "$_c_yel" "$_c_off"
         fi ;;
