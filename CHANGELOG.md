@@ -8,6 +8,30 @@ Changes to the vulnerability data (fixed versions, distribution packages) are
 listed separately from code changes, because they change verdicts without
 changing behaviour.
 
+## [3.1.0] - 2026-10-23
+
+### Fixed
+
+- **Cloudflare headers plus DNS that says otherwise was reported as `ok`.** The
+  branch after the DNS lookup held two different states: the lookup returned
+  nothing, and the lookup returned addresses of which not one belongs to
+  Cloudflare. Both answered "Cloudflare headers present (DNS could not be
+  confirmed from here)" with the advice to keep the ruleset enabled. The second
+  state is a finding, not a confirmation — the headers can come from a cache or
+  a proxy in front while the host that serves the site is not proxied at all —
+  and it now warns and names the addresses. The test suite had the old
+  behaviour written into it: the fixture answers with `cf-ray` from 127.0.0.1,
+  which is not a Cloudflare address, and the case asserted `OK`.
+
+### Added
+
+- **A banner above the fix is credited in the summary.** The verdict stays
+  undecided, because `X-Powered-By` is set by whoever answers the request, but
+  a reader who saw only "UNDECIDED" learned nothing about the number the site
+  actually announced. The reliability block now says how many of the sites
+  announced a version that carries the fix, and `--json` carries it as
+  `scope.urls_announcing_patched`.
+
 ## [3.0.1] - 2026-10-23
 
 ### Fixed
