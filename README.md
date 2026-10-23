@@ -100,6 +100,13 @@ bash -c "$(curl -fsSL https://github.com/EXT-IT/php2shell-check/releases/latest/
 [Net.ServicePointManager]::SecurityProtocol = 'Tls12'; $f = "$env:TEMP\p2s.ps1"; irm https://github.com/EXT-IT/php2shell-check/releases/latest/download/php2shell-check.ps1 -OutFile $f; & $f -RemoteOnly https://your-site.example; del $f
 ```
 
+No shell at hand? The same website check runs as a form on
+[ext-it.tech/php2shell](https://ext-it.tech/php2shell/). It reads its rules and
+its fix table out of this repository's latest release, so it cannot drift into a
+different verdict, and it sees exactly what the command above sees: whatever the
+site reveals in its headers. Same limit, same answer — the run on the server is
+still the only definite one.
+
 ## What the answer is worth
 
 **Run it on the server.** That is the only way to get a definite answer. There
