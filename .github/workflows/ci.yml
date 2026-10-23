@@ -85,7 +85,18 @@ jobs:
         env:
           SETUP: ${{ matrix.setup }}
           IMAGE: ${{ matrix.image }}
-        run: docker run --rm -e SETUP -v "$PWD:/src" -w /src "$IMAGE" sh -c "$SETUP && bash tests/run_tests.sh"
+        run: |
+          docker run --rm -e SETUP -v "$PWD:/src" -w /src "$IMAGE" \
+            sh -c "$SETUP && bash tests/run_tests.sh" > tests.log 2>&1 && rc=0 || rc=$?
+          cat tests.log
+          # Same reason as the Windows job: the log of a run needs a token, so
+          # a red job would say "failure" and nothing else. The Alpine failure
+          # of 3.0.0 had to be reproduced on a Docker host to be read at all.
+          if [ "$rc" -ne 0 ]; then
+            grep -E '^[[:space:]]*(FAIL|skip)|passed, [0-9]+ failed' tests.log \
+              | head -n 10 | while IFS= read -r line; do echo "::error::$line"; done
+          fi
+          exit "$rc"
 
   test-macos:
     name: Tests (macOS, bash 3.2)
@@ -96,7 +107,14 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
 
       - name: Run tests with the system bash
-        run: /bin/bash tests/run_tests.sh
+        run: |
+          /bin/bash tests/run_tests.sh > tests.log 2>&1 && rc=0 || rc=$?
+          cat tests.log
+          if [ "$rc" -ne 0 ]; then
+            grep -E '^[[:space:]]*(FAIL|skip)|passed, [0-9]+ failed' tests.log \
+              | head -n 10 | while IFS= read -r line; do echo "::error::$line"; done
+          fi
+          exit "$rc"
 
   test-windows:
     name: Tests (Windows, ${{ matrix.shell }})
