@@ -71,7 +71,10 @@ jobs:
             setup: apt-get update -qq && apt-get install -y -qq bash curl python3 >/dev/null
           - image: debian:13
             setup: apt-get update -qq && apt-get install -y -qq bash curl python3 >/dev/null
-          - image: rockylinux:9
+          # rockylinux/rockylinux is the maintained repository; the old
+          # library/rockylinux one is deprecated and is where the stall of
+          # 2026-10-23 happened. Measured on both: 238 tests pass either way.
+          - image: rockylinux/rockylinux:9
             setup: dnf install -y -q python3 >/dev/null
           - image: alpine:3.20
             setup: apk add --no-cache -q bash curl python3 coreutils
@@ -86,9 +89,17 @@ jobs:
           SETUP: ${{ matrix.setup }}
           IMAGE: ${{ matrix.image }}
         run: |
-          docker run --rm -e SETUP -v "$PWD:/src" -w /src "$IMAGE" \
-            sh -c "$SETUP && bash tests/run_tests.sh" > tests.log 2>&1 && rc=0 || rc=$?
-          cat tests.log
+          set -o pipefail
+          # The pull is a separate, bounded step. On 2026-10-23 this job was
+          # cancelled after 10.2 minutes where it normally takes 0.6, and the
+          # log held not one line between the start of the step and the
+          # cancel: the registry stalled before docker printed anything, and
+          # the output went to a file that is only shown after the run. Now
+          # the log says which half hung, a stall fails inside the job budget
+          # instead of eating it, and tee keeps the output live.
+          timeout 240 docker pull -q "$IMAGE" || timeout 240 docker pull -q "$IMAGE"
+          timeout 420 docker run --rm -e SETUP -v "$PWD:/src" -w /src "$IMAGE" \
+            sh -c "$SETUP && bash tests/run_tests.sh" 2>&1 | tee tests.log && rc=0 || rc=$?
           # Same reason as the Windows job: the log of a run needs a token, so
           # a red job would say "failure" and nothing else. The Alpine failure
           # of 3.0.0 had to be reproduced on a Docker host to be read at all.
@@ -108,8 +119,8 @@ jobs:
 
       - name: Run tests with the system bash
         run: |
-          /bin/bash tests/run_tests.sh > tests.log 2>&1 && rc=0 || rc=$?
-          cat tests.log
+          set -o pipefail
+          /bin/bash tests/run_tests.sh 2>&1 | tee tests.log && rc=0 || rc=$?
           if [ "$rc" -ne 0 ]; then
             grep -E '^[[:space:]]*(FAIL|skip)|passed, [0-9]+ failed' tests.log \
               | head -n 10 | while IFS= read -r line; do echo "::error::$line"; done
